@@ -272,8 +272,4 @@ proctoringSessionSchema.methods.initProctoringWindow = function (exam) {
   };
 };
 
-// Index for efficient queries
-proctoringSessionSchema.index({ studentId: 1, examId: 1 });
-proctoringSessionSchema.index({ status: 1, reviewStatus: 1 });
-
 module.exports = mongoose.model("ProctoringSession", proctoringSessionSchema);

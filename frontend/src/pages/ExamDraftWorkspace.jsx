@@ -535,6 +535,7 @@ const ExamDraftWorkspace = () => {
         autoSubmitOnTimeUp: true,
         maxAttempts: 1,
         passingScore: 50,
+        minDurationMinutes: 0,
         ...(data.exam.settings || {}),
       });
     }
@@ -1013,7 +1014,7 @@ const ExamDraftWorkspace = () => {
                         </label>
                       ))}
                     </div>
-                    <div className="grid max-w-md grid-cols-2 gap-4">
+                    <div className="grid max-w-2xl grid-cols-2 gap-4 sm:grid-cols-3">
                       <Input
                         label="Passing Score (%)"
                         type="number"
@@ -1028,6 +1029,14 @@ const ExamDraftWorkspace = () => {
                         min="1"
                         value={settings.maxAttempts ?? 1}
                         onChange={(e) => updateSetting("maxAttempts", parseInt(e.target.value) || 1)}
+                      />
+                      <Input
+                        label="Min Time Before Submit (min)"
+                        type="number"
+                        min="0"
+                        title="Students cannot submit before spending this many minutes on the exam. 0 disables the floor."
+                        value={settings.minDurationMinutes ?? 0}
+                        onChange={(e) => updateSetting("minDurationMinutes", Math.max(0, parseInt(e.target.value) || 0))}
                       />
                     </div>
                   </div>

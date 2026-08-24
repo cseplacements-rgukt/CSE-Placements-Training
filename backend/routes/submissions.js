@@ -288,6 +288,39 @@ router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
         .json({ message: "Exam submission time has ended" });
     }
 
+    // ── Minimum-time floor (server authoritative) ────────────
+    // If the exam defines settings.minDurationMinutes, a student cannot submit
+    // before spending that long on THEIR OWN attempt. Checked BEFORE the
+    // processing lock so an early attempt costs one indexed read and never
+    // strands the submission in a locked state. Auto-submit at time-up is not
+    // affected: min < duration is enforced by the Exam schema.
+    const minMinutes = Number(exam.settings?.minDurationMinutes) || 0;
+    if (minMinutes > 0) {
+      const probe = submissionId
+        ? await Submission.findById(submissionId)
+            .select("startedAt")
+            .lean()
+        : await Submission.findOne({ examId, studentId: user._id })
+            .sort({ startedAt: -1 })
+            .select("startedAt")
+            .lean();
+      if (!probe?.startedAt) {
+        return res.status(400).json({
+          code: "MIN_TIME_NOT_REACHED",
+          message: "Start the exam first — there is no active attempt to submit.",
+        });
+      }
+      const canSubmitAt = new Date(probe.startedAt.getTime() + minMinutes * 60000);
+      if (now < canSubmitAt) {
+        return res.status(400).json({
+          code: "MIN_TIME_NOT_REACHED",
+          message: `You need to spend at least ${minMinutes} minute${minMinutes === 1 ? "" : "s"} on this exam before submitting.`,
+          canSubmitAt: canSubmitAt.toISOString(),
+          remainingSeconds: Math.max(0, Math.ceil((canSubmitAt - now) / 1000)),
+        });
+      }
+    }
+
     // Find or create submission and atomically lock it for processing
     let submission;
     if (submissionId) {

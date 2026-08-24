@@ -253,6 +253,14 @@ const examSchema = new mongoose.Schema({
       type: Boolean,
       default: true,
     },
+    // Minimum time a student must spend before the Submit button unlocks
+    // (server-enforced on POST /api/submissions). 0 = no floor. Auto-submit
+    // at time-up is never blocked because this must stay < duration.
+    minDurationMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     enableNegativeMarking: {
       type: Boolean,
       default: false, // Teacher-configurable; no negative marking by default
@@ -345,6 +353,14 @@ examSchema.pre("validate", function (next) {
         new Error("Scheduled time, duration, and end time are required once an exam is published.")
       );
     }
+  }
+  // The minimum-time floor must always be reachable inside the exam window;
+  // otherwise students could be locked out of submitting entirely.
+  const minMin = this.settings?.minDurationMinutes;
+  if (minMin && this.duration && minMin >= this.duration) {
+    return next(
+      new Error("Minimum time before submit must be less than the exam duration.")
+    );
   }
   next();
 });

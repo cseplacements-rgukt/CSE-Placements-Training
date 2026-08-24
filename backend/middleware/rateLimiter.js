@@ -17,7 +17,7 @@ const userKey = (req) => req.user?.uid || `ip:${ipKeyGenerator(req.ip)}`;
 // appropriate for an exam: hundreds of students can share one NAT address.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100000,
+  limit: 100000,
   keyGenerator: userKey,
   message: 'Too many requests, please try again later.',
   standardHeaders: true,
@@ -27,7 +27,7 @@ const apiLimiter = rateLimit({
 // Stricter limiter for authentication routes - 5 requests per 15 minutes
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 requests per windowMs
+  limit: 5, // Limit each IP to 5 requests per windowMs
   message: 'Too many authentication attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -37,7 +37,7 @@ const authLimiter = rateLimit({
 // student rather than penalising everyone on a shared public IP.
 const submissionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
+  limit: 5,
   keyGenerator: userKey,
   message: 'Too many submission attempts, please try again later.',
   standardHeaders: true,
@@ -46,7 +46,7 @@ const submissionLimiter = rateLimit({
 
 const autoSaveLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 12,
+  limit: 12,
   keyGenerator: userKey,
   message: 'Too many autosave requests, please try again shortly.',
   standardHeaders: true,
@@ -55,7 +55,7 @@ const autoSaveLimiter = rateLimit({
 
 const proctoringEventLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,
+  limit: 30,
   keyGenerator: userKey,
   message: 'Too many proctoring events, please try again shortly.',
   standardHeaders: true,
@@ -66,7 +66,7 @@ const proctoringEventLimiter = rateLimit({
 // 10 per minute is generous for legitimate use but prevents brute-force.
 const examCodeLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  limit: 10,
   keyGenerator: userKey,
   message: 'Too many exam code attempts, please try again shortly.',
   standardHeaders: true,
@@ -85,7 +85,7 @@ const examCodeLimiter = rateLimit({
 // email-enumeration loops (which issue thousands of calls per minute).
 const preAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 1000,
+  limit: 1000,
   keyGenerator: (req) => ipKeyGenerator(req.ip),
   message: 'Too many requests from this network, please try again later.',
   standardHeaders: true,

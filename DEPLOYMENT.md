@@ -78,6 +78,50 @@ Render Free sleeps after **15 min without traffic**; next request takes ~50 s (c
 
 ---
 
+## Part 2B — Alternative: Backend on Railway (~$5–15/mo)
+
+Render Free sleeps after 15 min idle and runs on 0.1 CPU. If you want an always-on backend without pinger hacks, Railway is the better host for a real exam round. There is **no permanent free tier**: a 30-day trial gives $5 credit; after that the Hobby plan ($5/mo, fee returns as usage credit) plus metered compute — an app like this typically lands around $10–15/month total.
+
+1. Push the repo to GitHub → <https://railway.com> → sign in with GitHub → **New Project → Deploy from GitHub repo** → pick this repo.
+2. Open the service → **Variables** tab → paste the exact same environment variables as the Render table above (`NODE_ENV`, `MONGODB_URI`, `STUDENT_JWT_SECRET`, `FIREBASE_*`, `CLOUDINARY_*`, `FRONTEND_URL`, `TRUST_PROXY=1`). Do not set `REDIS_URL`. `PORT` is injected automatically — `server.js` already reads it.
+3. Service **Settings**:
+   - **Root Directory:** `/backend`
+   - **Build Command:** `npm install`
+   - **Start Command:** `node server.js`   ← not nodemon
+   - **Region:** Southeast Asia — Singapore · closest to RGUKT (~30–60 ms vs 200+ ms from US regions)
+   - **Healthcheck Path:** `/health`
+4. **Settings → Networking → Generate Domain** → you get `https://<name>.up.railway.app` with HTTPS (camera/proctoring requires HTTPS). That URL is your `VITE_API_URL` on Vercel and goes into `FRONTEND_URL`.
+5. Size: default 0.5 GB RAM is fine while testing; for exam day raise memory to ~**1 GB** (service card → resource sliders). One instance comfortably serves ~150–200 students of text traffic.
+6. Verify: open `https://<name>.up.railway.app/health` → `{"status":"healthy"}`.
+
+### Railway rules for a lag-free exam
+
+| Rule | Why |
+|---|---|
+| Keep **exactly one instance/replica** | Rate limiters use an in-memory store (`backend/middleware/rateLimiter.js`). A second replica splits each student's counters across processes — autosave/proctoring limits stop working as designed. Scale out only after moving limiters to Redis. |
+| Disable auto-deploy on exam day (Settings → Source) | A stray `git push` mid-exam redeploys and drops in-flight requests. Deploy + verify the day before; freeze during the window. |
+| Restart the service ~30 min before start | Fresh process and Mongo pool; also confirms clean boot. |
+| Watch the **Metrics** tab during a mock test | CPU pinned or RSS near the memory cap → bump the slider one step before the real exam. |
+| Set a usage cap (workspace Usage settings) | Billing is usage-based; the cap prevents surprise charges if something loops. |
+
+### Load-test before exam day (works against Render too)
+
+```bash
+cd backend
+GOOGLE_APPLICATION_CREDENTIALS=<service-account.json> \
+FIREBASE_WEB_API_KEY=<web-api-key> \
+MONGO_URI=<MONGODB_URI> COUNT=200 node ../deploy/loadtest/mint-tokens.js   # tokens last ~1 h
+
+k6 run -e BASE_URL=https://<name>.up.railway.app/api \
+       -e EXAM_CODE=<published-code> ../deploy/loadtest/k6-exam.js
+```
+
+The script ramps 25→250 concurrent virtual students through real exam traffic (join → 30 s delta autosaves → batched proctoring events → submit burst). Pass criteria: p95 latency stays low at your target concurrency with no 429/5xx spike. Run it once against staging, fix what it finds, then trust the platform.
+
+Still true regardless of host: **Atlas M0 is the bottleneck**, not the app server — stagger section end-times by 1–2 minutes to flatten the submit burst.
+
+---
+
 ## Part 3 — Frontend on Vercel
 
 1. <https://vercel.com> → sign in with GitHub → **Add New Project** → import the repo.

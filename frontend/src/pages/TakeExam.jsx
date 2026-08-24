@@ -202,12 +202,24 @@ const TakeExam = () => {
   const eventFlushTimerRef = useRef(null);
   const flushInFlightRef = useRef(false);
   const lastTabViolationAtRef = useRef(0);
+  // Epoch ms when violation monitoring switched ON. Fullscreen drops caused by
+  // camera-permission prompts / WebGazer's own getUserMedia fire right after
+  // calibration — inside this grace window they are silently repaired instead
+  // of being logged as cheating violations at the very start of the test.
+  const monitoringStartedAtRef = useRef(0);
+  const FULLSCREEN_SETTLE_GRACE_MS = 12000;
+  // Programmatic re-entry is blocked ~1.25 s after an Esc-initiated exit
+  // (browser security cooldown) — retry once past that window.
+  const fullscreenRestoreTimersRef = useRef([]);
   // In-app dialog (never window.alert/confirm — native popups drop fullscreen
   // and cause false violations). The pending Promise resolver lives in a ref.
   const [dialog, setDialog] = useState(null); // { kind: "confirm"|"notice", title, message, confirmLabel, tone }
   const dialogResolveRef = useRef(null);
   const dialogActiveRef = useRef(false); // Mirror of `dialog` for stable callbacks
   const [loadError, setLoadError] = useState(null);
+  // Minimum-time floor: epoch ms when Submit unlocks (null = no floor).
+  const [submitUnlockAt, setSubmitUnlockAt] = useState(null);
+  const [, setGateTick] = useState(0); // re-render once per second while gated
 
   // Load exam data on mount (for instructions screen)
   useEffect(() => {
@@ -257,6 +269,44 @@ const TakeExam = () => {
       setWebcamEnabled(true);
     }
   });
+
+  // While the submit gate is active, tick once per second so the Submit
+  // button label counts down. The interval exists only while gated.
+  useEffect(() => {
+    if (!submitUnlockAt || Date.now() >= submitUnlockAt) return undefined;
+    const timer = setInterval(() => setGateTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [submitUnlockAt]);
+
+  // ── Fullscreen restore helpers ────────────────────────────────────────────
+  const clearRestoreTimers = useCallback(() => {
+    fullscreenRestoreTimersRef.current.forEach(clearTimeout);
+    fullscreenRestoreTimersRef.current = [];
+  }, []);
+
+  // Schedule programmatic re-entry attempts. Chrome refuses requestFullscreen
+  // for ~1.25 s after an Esc-initiated exit, so one early attempt (covers
+  // permission-prompt drops) is followed by a post-cooldown attempt. Every
+  // call is guarded by submitting/dialog state inside requestFullscreen paths.
+  const scheduleFullscreenRestore = useCallback(() => {
+    if (!fullscreenRequiredRef.current) return;
+    clearRestoreTimers();
+    [600, 1800].forEach((delay) => {
+      fullscreenRestoreTimersRef.current.push(
+        setTimeout(() => {
+          if (
+            !submittingRef.current &&
+            !dialogActiveRef.current &&
+            !document.fullscreenElement &&
+            !document.webkitFullscreenElement &&
+            !document.msFullscreenElement
+          ) {
+            requestFullscreen();
+          }
+        }, delay),
+      );
+    });
+  }, [clearRestoreTimers]);
 
   // ── In-app dialogs (promise-based replacements for alert/confirm) ────────
   const showConfirm = useCallback(({ title, message, confirmLabel = "Confirm", tone = "primary" }) => {
@@ -360,6 +410,10 @@ const TakeExam = () => {
 
       setExamEndAt(finalEndTime.getTime());
 
+      // Minimum-time floor for the Submit button (server enforces it too).
+      const minMinutes = Number(activeExam.settings?.minDurationMinutes) || 0;
+      setSubmitUnlockAt(minMinutes > 0 ? startedAt.getTime() + minMinutes * 60000 : null);
+
       const initialAnswers = {};
       if (
         submissionData.submission.answers &&
@@ -392,13 +446,13 @@ const TakeExam = () => {
         return;
       }
 
-      if (exam.settings?.requireWebcam !== false) {
-        await startProctoring(token, exam._id, submissionData.submission._id);
+      if (activeExam.settings?.requireWebcam !== false) {
+        await startProctoring(token, activeExam, submissionData.submission._id);
       }
 
       // Honor the exam's fullscreen setting (default: required). When not
       // required, no request and no exit-violation logging happen at all.
-      const fsRequired = exam.settings?.requireFullscreen !== false;
+      const fsRequired = activeExam.settings?.requireFullscreen !== false;
       fullscreenRequiredRef.current = fsRequired;
       if (fsRequired) {
         requestFullscreen();
@@ -422,7 +476,7 @@ const TakeExam = () => {
     }
   };
 
-  const startProctoring = async (token, examIdParam, submissionId) => {
+  const startProctoring = async (token, examParam, submissionId) => {
     try {
       const deviceInfo = {
         browser: navigator.userAgent,
@@ -432,18 +486,20 @@ const TakeExam = () => {
 
       const response = await examService.startProctoringSession(
         token,
-        examIdParam,
+        examParam?._id,
         submissionId,
         deviceInfo,
       );
       setProctoringSession(response.session);
 
       // Show calibration screen if camera is required
-      if (exam.settings?.requireWebcam !== false) {
+      if (examParam?.settings?.requireWebcam !== false) {
         setCalibrationRequired(true);
       } else {
         // Skip calibration if camera not required
         setCalibrationComplete(true);
+        monitoringEnabledRef.current = true;
+        monitoringStartedAtRef.current = Date.now();
         await startWebcam();
         startLiveFaceDetection();
         startGazeTracking();
@@ -686,17 +742,29 @@ const TakeExam = () => {
     setCalibrationRequired(false);
     setCalibrationComplete(true);
 
+    // Enable proctoring monitoring NOW. The fullscreen grace window also
+    // starts here: camera prompts / webgazer init can still drop fullscreen
+    // in the next few seconds — repaired silently, not flagged as cheating.
+    monitoringEnabledRef.current = true;
+    monitoringStartedAtRef.current = Date.now();
+
     // Start webcam after calibration
     await startWebcam();
-
-    // Enable proctoring monitoring NOW
-    monitoringEnabledRef.current = true;
 
     // Start live AI face detection
     startLiveFaceDetection();
 
     // Start WebGazer-based gaze tracking (sustainment-threshold model)
     startGazeTracking();
+
+    // The calibration finish click is a fresh user gesture — the most
+    // reliable moment to (re)enter fullscreen, since the request made at
+    // "Start Exam" often expired during network round-trips or was dropped
+    // by the camera-permission prompt.
+    if (fullscreenRequiredRef.current) {
+      await requestFullscreen();
+      scheduleFullscreenRestore();
+    }
   };
 
   const startGazeTracking = () => {
@@ -721,6 +789,7 @@ const TakeExam = () => {
     setCalibrationRequired(false);
     setCalibrationComplete(true);
     monitoringEnabledRef.current = true;
+    monitoringStartedAtRef.current = Date.now();
     await startWebcam();
     startLiveFaceDetection();
     startGazeTracking();
@@ -732,6 +801,10 @@ const TakeExam = () => {
     showFocusWarning(
       "Camera calibration failed — continuing with a flagged proctoring session."
     );
+    if (fullscreenRequiredRef.current) {
+      await requestFullscreen();
+      scheduleFullscreenRestore();
+    }
   };
 
   const performAutoSave = async () => {
@@ -819,6 +892,15 @@ const TakeExam = () => {
     // active, not already submitting, and no in-app dialog is open
     // (Esc-to-dismiss also exits fullscreen).
     if (!isCurrentlyFullscreen && fullscreenRequiredRef.current && examRef.current && !submittingRef.current && !document.hidden && monitoringEnabledRef.current && !dialogActiveRef.current) {
+      // Grace window right after monitoring starts: camera-permission prompts
+      // and WebGazer's own getUserMedia can drop fullscreen seconds after the
+      // student finishes calibration. That is a platform artifact, not a
+      // cheating signal — repair silently instead of flagging it.
+      const withinGrace = Date.now() - monitoringStartedAtRef.current < FULLSCREEN_SETTLE_GRACE_MS;
+      if (withinGrace) {
+        scheduleFullscreenRestore();
+        return;
+      }
       setFullscreenExitCount((prev) => {
         const newCount = prev + 1;
         logProctoringEvent(
@@ -836,7 +918,7 @@ const TakeExam = () => {
         if (!submittingRef.current && !dialogActiveRef.current) requestFullscreen();
       }, 500);
     }
-  }, [logProctoringEvent, showFocusWarning]);
+  }, [logProctoringEvent, showFocusWarning, scheduleFullscreenRestore]);
 
   // EventMonitor: handleVisibilityChange
   const handleVisibilityChange = useCallback(async () => {
@@ -1004,6 +1086,7 @@ const TakeExam = () => {
   const cleanup = () => {
     removeMonitoring();
     exitFullscreen();
+    clearRestoreTimers();
 
     if (autoSaveIntervalRef.current) {
       clearInterval(autoSaveIntervalRef.current);
@@ -1123,6 +1206,18 @@ const TakeExam = () => {
       }
     }
 
+    // Minimum-time floor — the server enforces this too, but failing there
+    // would lock the student out with a confusing error, so mirror it here.
+    if (!autoSubmit && submitUnlockAt && Date.now() < submitUnlockAt) {
+      const remaining = Math.ceil((submitUnlockAt - Date.now()) / 60000);
+      await showNotice({
+        title: "Too early to submit",
+        message: `You need to spend at least ${Math.ceil((submitUnlockAt - new Date(submission?.startedAt || Date.now()).getTime()) / 60000)} minutes on this exam before submitting. About ${remaining} minute${remaining === 1 ? "" : "s"} left.`,
+        tone: "info",
+      });
+      return;
+    }
+
     // In-app confirmation — no window.confirm. Native popups drop the browser
     // out of fullscreen and would log a false fullscreen-exit violation even
     // when the student cancels. Nothing here leaves the page, so cancelling
@@ -1151,10 +1246,11 @@ const TakeExam = () => {
       const token = await getAuthToken();
 
       // Flush any queued violations and close the proctoring session together,
-      // so nothing recorded during the exam is lost or delayed.
+      // so nothing recorded during the exam is lost or delayed. Uses the ref —
+      // the timer-driven auto-submit path must never see a stale closure.
       await Promise.allSettled([
-        proctoringSession
-          ? examService.endProctoringSession(token, proctoringSession._id)
+        proctoringSessionRef.current
+          ? examService.endProctoringSession(token, proctoringSessionRef.current._id)
           : Promise.resolve(),
         flushProctoringEvents(),
       ]);
@@ -1301,10 +1397,30 @@ const TakeExam = () => {
                 )}
                 <li>Copy/paste and right-click are disabled</li>
                 <li>Your answers are auto-saved every 30 seconds</li>
+                {(exam.settings?.minDurationMinutes || 0) > 0 && (
+                  <li className="font-medium text-ink">
+                    You can submit only after spending at least{" "}
+                    {exam.settings.minDurationMinutes} minutes on this exam
+                  </li>
+                )}
               </ul>
             </section>
 
-            <Button size="lg" className="w-full sm:w-auto" onClick={() => setShowInstructions(false)}>
+            <Button
+              size="lg"
+              className="w-full sm:w-auto"
+              onClick={() => {
+                // Enter fullscreen synchronously inside the click handler:
+                // browsers only honour the request while the transient user
+                // activation is fresh, and startExamSession awaits two API
+                // calls before its own attempt — on slow campus Wi-Fi that
+                // activation has already expired, leaving students windowed.
+                if ((exam.settings?.requireFullscreen ?? true) !== false) {
+                  requestFullscreen();
+                }
+                setShowInstructions(false);
+              }}
+            >
               I Understand, Start Exam
             </Button>
           </div>
@@ -1380,6 +1496,11 @@ const TakeExam = () => {
   }
 
   const currentQ = exam.questions[currentQuestion];
+  const gateActive = !!submitUnlockAt && Date.now() < submitUnlockAt;
+  const gateSecondsLeft = gateActive
+    ? Math.ceil((submitUnlockAt - Date.now()) / 1000)
+    : 0;
+  const gateClock = `${String(Math.floor(gateSecondsLeft / 60)).padStart(2, "0")}:${String(gateSecondsLeft % 60).padStart(2, "0")}`;
 
   if (!currentQ) {
     return <LoadingScreen message="Question not found" />;
@@ -1578,6 +1699,10 @@ const TakeExam = () => {
                 <Button onClick={() => goToQuestion(currentQuestion + 1)}>
                   Next
                 </Button>
+              ) : gateActive ? (
+                <Button disabled title={`Submitting unlocks in ${gateClock}`}>
+                  Locked {gateClock}
+                </Button>
               ) : (
                 <Button
                   onClick={() => handleSubmit(false)}
@@ -1598,6 +1723,11 @@ const TakeExam = () => {
           <span>
             Answered: <strong className="tabular-nums text-ink">{answeredCount}</strong> / {exam.questions.length}
           </span>
+          {gateActive && (
+            <span className="font-medium text-amber-700" aria-live="polite">
+              Submit unlocks in {gateClock}
+            </span>
+          )}
           <span aria-live="polite">{autoSaveStatus}</span>
           <span className="sm:hidden">
             Trust <strong className="tabular-nums text-ink">{trustScore}%</strong>
