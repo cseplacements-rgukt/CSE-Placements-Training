@@ -4,12 +4,6 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const verifyFirebaseToken = require("../middleware/auth");
 const {
-  isValidExamCellPassword,
-  generateExamCellPassword,
-  setExamCellPassword,
-  getExamCellPasswordStatus,
-} = require("../utils/examCellPassword");
-const {
   addStudentToRoster,
   hashRosterPassword,
   RosterError,
@@ -164,8 +158,9 @@ router.post(
 // Accepts either { csv: "id,name,batch,password\n..." } or
 // { rows: [{ idNumber, name, batchYear, password }] }. A header row is
 // auto-detected and skipped. Duplicate IDs are skipped individually, never
-// fatal. `password` is the student's OWN college exam-cell password and is
-// stored bcrypt-hashed; rows without one start on the legacy shared password.
+// fatal. `password` is REQUIRED on every row — each student's own college
+// exam-cell password (the one they already use for results), stored
+// bcrypt-hashed. Students log in with ID/email + that password.
 router.post(
   "/import",
   verifyFirebaseToken,
@@ -198,6 +193,11 @@ router.post(
           const year = parseInt(batchYear);
           if (!year || year < 2000 || year > 2100) {
             throw new Error(`Invalid batch year "${batchYear}"`);
+          }
+          if (!String(password || "").trim()) {
+            throw new Error(
+              "Missing exam-cell password (column 4) — use the student's college-issued password",
+            );
           }
           const normalized = normalizeIdNumber(idNumber);
           const email = deriveEmail(normalized);
@@ -376,60 +376,6 @@ router.post(
       });
     } catch (error) {
       console.error("Error deleting batch:", error);
-      res.status(500).json({ message: "Server error", error: error.message });
-    }
-  },
-);
-
-// ─── Exam-cell password (shared by whole roster) ─────────────────────
-router.put(
-  "/exam-cell-password",
-  verifyFirebaseToken,
-  requireRosterManager,
-  async (req, res) => {
-    try {
-      const { password } = req.body;
-      if (!isValidExamCellPassword(password)) {
-        return res.status(400).json({
-          message:
-            "Password must be exactly 5 characters: 3 letters followed by 2 digits (e.g. O3C6U)",
-        });
-      }
-      const normalized = await setExamCellPassword(password);
-      res.json({
-        message: "Exam cell password updated",
-        passwordMasked: `${normalized.slice(0, 1)}***${normalized.slice(-1)}`,
-      });
-    } catch (error) {
-      console.error("Error setting exam cell password:", error);
-      res.status(500).json({ message: "Server error", error: error.message });
-    }
-  },
-);
-
-router.post(
-  "/exam-cell-password/generate",
-  verifyFirebaseToken,
-  requireRosterManager,
-  async (req, res) => {
-    try {
-      res.json({ password: generateExamCellPassword() });
-    } catch (error) {
-      console.error("Error generating password:", error);
-      res.status(500).json({ message: "Server error", error: error.message });
-    }
-  },
-);
-
-router.get(
-  "/exam-cell-password/status",
-  verifyFirebaseToken,
-  requireRosterManager,
-  async (req, res) => {
-    try {
-      res.json(await getExamCellPasswordStatus());
-    } catch (error) {
-      console.error("Error fetching password status:", error);
       res.status(500).json({ message: "Server error", error: error.message });
     }
   },

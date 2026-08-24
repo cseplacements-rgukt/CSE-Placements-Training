@@ -1180,9 +1180,11 @@ const TakeExam = () => {
       // only after the student acknowledges it.
       await showNotice({
         title: "Exam submitted",
-        message: pendingReview
-          ? "Submitted successfully! Your objective answers have been auto-scored. Written answers are now pending coordinator review — your final score will appear on the dashboard once reviewed."
-          : `Submitted successfully!\nScore: ${result.score}/${result.maxScore} (${result.percentage}%)`,
+        message: result.resultsPending
+          ? "Submitted successfully! Results are withheld until the exam window closes for everyone — check My Submissions afterwards."
+          : pendingReview
+            ? "Submitted successfully! Your objective answers have been auto-scored. Written answers are now pending coordinator review — your final score will appear on the dashboard once reviewed."
+            : `Submitted successfully!\nScore: ${result.score}/${result.maxScore} (${result.percentage}%)`,
         confirmLabel: "Go to Dashboard",
         tone: "success",
       });

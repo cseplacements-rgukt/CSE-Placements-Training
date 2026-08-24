@@ -1,11 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
   signInWithEmailAndPassword,
-  signInWithPopup,
   signOut,
   onAuthStateChanged,
 } from 'firebase/auth';
-import { auth, googleProvider } from '../config/firebase';
+import { auth } from '../config/firebase';
 import axios from 'axios';
 import { STAFF_ROLES } from '../utils/roles';
 
@@ -78,7 +77,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // ── Student roster login (ID/email + shared exam-cell password) ───────
+  // ── Student roster login (ID/email + own exam-cell password) ────────
   const studentLogin = async (identifier, password) => {
     const response = await axios.post(`${API_URL}/auth/student-login`, {
       identifier,
@@ -145,58 +144,6 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem(STUDENT_TOKEN_KEY);
     localStorage.removeItem(STUDENT_PROFILE_KEY);
     setStudentToken(null);
-  };
-
-  // ── Staff Google sign-in (already-provisioned accounts only) ──────────
-  // No auto-registration: the backend /auth/me endpoint binds the Google
-  // identity to a provisioned staff account when the emails match. A Google
-  // email that doesn't match any staff account is an expected failure.
-  const loginWithGoogle = async () => {
-    clearStudentSession(); // never hold both session types at once
-    authActionRef.current = true;
-    try {
-      const userCredential = await signInWithPopup(auth, googleProvider);
-      const token = await userCredential.user.getIdToken();
-
-      let profile;
-      try {
-        profile = await fetchUserProfile(token);
-      } catch (profileError) {
-        await signOut(auth);
-        setUserProfile(null);
-        if (
-          profileError.response?.status === 404 ||
-          profileError.response?.status === 401 ||
-          profileError.response?.status === 403
-        ) {
-          throw new Error(
-            `No staff account matches ${userCredential.user.email || 'this Google account'}. Accounts are provisioned by an administrator — ask your super admin, or sign in with your work email and password.`,
-          );
-        }
-        throw profileError;
-      }
-
-      if (!STAFF_ROLES.includes(profile.role)) {
-        await signOut(auth);
-        setUserProfile(null);
-        throw new Error(
-          'This account is not a staff account. Students must sign in with their ID number on the Student tab.',
-        );
-      }
-
-      return userCredential;
-    } catch (googleError) {
-      // Classic Firebase collision: the Google email belongs to an existing
-      // password-based account. Direct the person to password sign-in.
-      if (googleError?.code === 'auth/account-exists-with-different-credential') {
-        throw new Error(
-          `${googleError.customData?.email || 'This email'} already has a password set. Sign in with your email and password instead.`,
-        );
-      }
-      throw googleError;
-    } finally {
-      authActionRef.current = false;
-    }
   };
 
   const logout = async () => {
@@ -285,7 +232,6 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: Boolean(currentUser || studentToken),
     studentLogin,
     login,
-    loginWithGoogle,
     logout,
     getAuthToken,
     checkLoginLock,

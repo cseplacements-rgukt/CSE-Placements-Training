@@ -11,6 +11,10 @@ const {
   snapshotFieldsFromUser,
   applyStudentSnapshotFallback,
 } = require("../utils/studentSnapshot");
+const {
+  resolveRosterStudent,
+  rosterStudentIdFromToken,
+} = require("../utils/rosterIdentity");
 
 const EVENT_TYPES = new Set([
   "tab_switch", "tab_returned", "fullscreen_exit", "focus_lost", "focus_returned",
@@ -103,8 +107,8 @@ async function recordEvents({ sessionId, studentId, events }) {
 // Start a proctoring session
 router.post("/start", verifyFirebaseToken, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user || user.role !== "student") {
+    const user = await resolveRosterStudent(req);
+    if (!user) {
       return res
         .status(403)
         .json({ message: "Only students can start proctoring sessions" });
@@ -181,12 +185,13 @@ router.post("/start", verifyFirebaseToken, async (req, res) => {
 // Log a proctoring event
 router.post("/event", verifyFirebaseToken, proctoringEventLimiter, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user || user.role !== "student") return res.status(403).json({ message: "Only students can log proctoring events" });
+    // Hottest proctoring path — student id straight from the signed token.
+    const studentId = rosterStudentIdFromToken(req);
+    if (!studentId) return res.status(403).json({ message: "Only students can log proctoring events" });
 
     const events = normaliseEvents([{ type: req.body.eventType, severity: req.body.severity, details: req.body.details, clientTimestamp: req.body.clientTimestamp }]);
     if (!events) return res.status(400).json({ message: "Invalid proctoring event" });
-    const session = await recordEvents({ sessionId: req.body.sessionId, studentId: user._id, events });
+    const session = await recordEvents({ sessionId: req.body.sessionId, studentId, events });
     if (!session) return res.status(404).json({ message: "Session not found" });
     // Trimmed response: the client only needs the updated trust score. The
     // full session (with up to 500 embedded events) is NOT shipped back on
@@ -202,11 +207,11 @@ router.post("/event", verifyFirebaseToken, proctoringEventLimiter, async (req, r
 // session update. High-value events may continue using /event immediately.
 router.post("/events/batch", verifyFirebaseToken, proctoringEventLimiter, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user || user.role !== "student") return res.status(403).json({ message: "Only students can log proctoring events" });
+    const studentId = rosterStudentIdFromToken(req);
+    if (!studentId) return res.status(403).json({ message: "Only students can log proctoring events" });
     const events = normaliseEvents(req.body.events);
     if (!events) return res.status(400).json({ message: "Provide 1 to 20 valid proctoring events" });
-    const session = await recordEvents({ sessionId: req.body.sessionId, studentId: user._id, events });
+    const session = await recordEvents({ sessionId: req.body.sessionId, studentId, events });
     if (!session) return res.status(404).json({ message: "Session not found" });
     res.json({ session: pickSessionAck(session), message: "Events logged" });
   } catch (error) {
@@ -218,14 +223,14 @@ router.post("/events/batch", verifyFirebaseToken, proctoringEventLimiter, async 
 // End proctoring session
 router.post("/end", verifyFirebaseToken, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user) {
+    const studentId = rosterStudentIdFromToken(req);
+    if (!studentId) {
       return res.status(404).json({ message: "User not found" });
     }
 
     const { sessionId } = req.body;
 
-    const session = await ProctoringSession.findOne({ _id: sessionId, studentId: user._id });
+    const session = await ProctoringSession.findOne({ _id: sessionId, studentId });
     if (!session) {
       return res.status(404).json({ message: "Session not found" });
     }

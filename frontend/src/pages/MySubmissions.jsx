@@ -152,7 +152,22 @@ const MySubmissions = () => {
                   </div>
 
                   <div className="mt-4 grid grid-cols-4 gap-2 border-t border-line pt-4">
-                    {submission.status === "grading" ? (
+                    {submission.resultsPending ? (
+                      <p className="col-span-4 text-[13px] text-ink-muted">
+                        Results will be available{" "}
+                        <strong className="text-ink">
+                          {submission.resultsReleaseAt
+                            ? new Date(submission.resultsReleaseAt).toLocaleString([], {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : "after the exam ends"}
+                        </strong>{" "}
+                        — after the exam window closes for everyone.
+                      </p>
+                    ) : submission.status === "grading" ? (
                       <p className="col-span-4 text-[13px] text-ink-muted">
                         Your submission is awaiting coordinator review.
                       </p>
@@ -220,23 +235,38 @@ const MySubmissions = () => {
               <Badge dot variant={getStatusConfig(selectedSubmission.status).variant}>
                 {getStatusConfig(selectedSubmission.status).label}
               </Badge>
-              {(selectedSubmission.status === "graded" ||
-                selectedSubmission.status === "submitted") && (
-                <span className={`text-sm font-semibold tabular-nums ${selectedSubmission.percentage >= 50 ? "text-success" : "text-danger"}`}>
-                  {selectedSubmission.score} / {selectedSubmission.maxScore} ({selectedSubmission.percentage}%)
+              {selectedSubmission.resultsPending ? (
+                <span className="text-sm font-medium text-ink-muted">
+                  Results pending — released after the exam window closes
                 </span>
+              ) : (
+                (selectedSubmission.status === "graded" ||
+                  selectedSubmission.status === "submitted") && (
+                  <span className={`text-sm font-semibold tabular-nums ${selectedSubmission.percentage >= 50 ? "text-success" : "text-danger"}`}>
+                    {selectedSubmission.score} / {selectedSubmission.maxScore} ({selectedSubmission.percentage}%)
+                  </span>
+                )
               )}
             </span>
           )
         }
       >
         {selectedSubmission && (
-          <div className="space-y-4">
-            {!canShowCorrectAnswer(selectedSubmission) && (
-              <Alert variant="info">
-                Your coordinator has not released the right answers yet.
-              </Alert>
-            )}
+            <div className="space-y-4">
+              {selectedSubmission.resultsPending && (
+                <Alert variant="info">
+                  Results are withheld until the exam window closes for everyone
+                  {selectedSubmission.resultsReleaseAt
+                    ? ` (available ${new Date(selectedSubmission.resultsReleaseAt).toLocaleString()})`
+                    : ""}
+                  .
+                </Alert>
+              )}
+              {!canShowCorrectAnswer(selectedSubmission) && (
+                <Alert variant="info">
+                  Your coordinator has not released the right answers yet.
+                </Alert>
+              )}
 
             <div className="space-y-4">
               {(selectedSubmission.examId?.questions || []).map((question, index) => {

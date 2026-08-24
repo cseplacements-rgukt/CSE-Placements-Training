@@ -9,6 +9,63 @@ const { submissionLimiter, autoSaveLimiter } = require("../middleware/rateLimite
 const { gradeMCQ, EXACT_MATCH_TYPES, MANUAL_REVIEW_TYPES } = require("../services/autoGrader");
 
 const { snapshotFieldsFromUser, applyStudentSnapshotFallback } = require("../utils/studentSnapshot");
+const {
+  resolveRosterStudent,
+  rosterStudentIdFromToken,
+} = require("../utils/rosterIdentity");
+
+// ── Result release gating ───────────────────────────────────────────────────
+// Students never see scores before the WHOLE exam window closes: results are
+// released only after `endTime` + a 5-minute buffer (covers late auto-
+// submits and clock drift). Until then every student-facing view strips
+// scores/answer marks and flags the submission as `resultsPending`.
+const RESULTS_RELEASE_BUFFER_MS = 5 * 60 * 1000;
+
+function examResultsReleaseAt(exam) {
+  if (!exam) return null;
+  const end = exam.endTime
+    ? new Date(exam.endTime)
+    : exam.scheduledAt && exam.duration
+      ? new Date(new Date(exam.scheduledAt).getTime() + exam.duration * 60000)
+      : null;
+  return end
+    ? new Date(end.getTime() + RESULTS_RELEASE_BUFFER_MS)
+    : null;
+}
+
+function resultsReleasedFor(exam, at = new Date()) {
+  const releaseAt = examResultsReleaseAt(exam);
+  // No timing info (shouldn't happen for published exams) → don't gate.
+  return !releaseAt || releaseAt.getTime() <= at.getTime();
+}
+
+// Mutates a student-facing submission object: hides all score data until
+// release time and stamps when results become visible.
+function gateResultsForStudent(submissionObj, exam) {
+  if (resultsReleasedFor(exam)) return submissionObj;
+  const releaseAt = examResultsReleaseAt(exam);
+  submissionObj.resultsPending = true;
+  submissionObj.resultsReleaseAt = releaseAt ? releaseAt.toISOString() : null;
+  submissionObj.score = 0;
+  submissionObj.percentage = 0;
+  submissionObj.maxScore = submissionObj.maxScore ?? 0;
+  submissionObj.answers = submissionObj.answers?.map((a) => ({
+    ...a,
+    isCorrect: undefined,
+    marksAwarded: undefined,
+    slmScore: undefined,
+  }));
+  if (submissionObj.examId && typeof submissionObj.examId === "object") {
+    submissionObj.examId.questions = submissionObj.examId.questions?.map((q) => ({
+      ...q,
+      correctAnswer: undefined,
+      modelAnswer: undefined,
+      explanation: undefined,
+    }));
+  }
+  return submissionObj;
+}
+
 // ── Deterministic per-submission shuffle ────────────────────────────────────
 // Seeded Fisher-Yates: the same submission always gets the SAME order (page
 // reloads stay consistent) while different students get different orders.
@@ -56,10 +113,11 @@ function prepareExamForStudent(exam, submission) {
 }
 
 // Start an exam (creates in-progress submission)
+
 router.post("/start", verifyFirebaseToken, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user || user.role !== "student") {
+    const user = await resolveRosterStudent(req);
+    if (!user) {
       return res.status(403).json({ message: "Only students can start exams" });
     }
 
@@ -150,12 +208,14 @@ router.post("/start", verifyFirebaseToken, async (req, res) => {
 // Auto-save answers
 router.post("/auto-save", verifyFirebaseToken, autoSaveLimiter, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
-    if (!user || user.role !== "student") {
+    // Hottest endpoint during an exam (every student, every 30 s). The
+    // student id comes from the signed token — no Mongo identity lookup.
+    if (req.user?.authType !== "student-roster" || !req.user.studentId) {
       return res
         .status(403)
         .json({ message: "Only students can save answers" });
     }
+    const user = { _id: req.user.studentId };
 
     const { submissionId, changes, answers } = req.body;
     // `answers` is accepted temporarily for clients deployed before delta saves.
@@ -197,9 +257,9 @@ router.post("/auto-save", verifyFirebaseToken, autoSaveLimiter, async (req, res)
 // Submit an exam (Student only)
 router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseUid: req.user.uid });
+    const user = await resolveRosterStudent(req);
 
-    if (!user || user.role !== "student") {
+    if (!user) {
       return res
         .status(403)
         .json({ message: "Only students can submit exams" });
@@ -376,14 +436,13 @@ router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
       },
     ]);
 
-    // Create notification for student
+    // Create notification for student — never leaks the score, results are
+    // only released after the exam window closes (+5 min buffer).
     await Notification.create({
       userId: user._id,
       type: "exam_submitted",
       title: "Exam Submitted",
-      message: hasTextQuestions
-        ? `Your submission for "${exam.title}" has been received. Text answers are pending coordinator review.`
-        : `Your submission for "${exam.title}" has been received. Score: ${submission.percentage}%`,
+      message: `Your submission for "${exam.title}" has been received. Results will be available after the exam ends.`,
       data: { examId, submissionId: submission._id },
       priority: "medium",
     });
@@ -400,15 +459,29 @@ router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
       });
     }
 
+    // Results stay hidden until the whole exam window closes (+5 min) — the
+    // submit response carries no score data before that.
+    const released = resultsReleasedFor(exam);
+
     // *** RESPOND IMMEDIATELY — grading of exact-match parts is already done ***
     res.status(201).json({
       submission,
-      message: hasTextQuestions
-        ? "Exam submitted — text answers pending coordinator review"
-        : "Exam submitted successfully",
-      score: submission.score,
-      maxScore: submission.maxScore,
-      percentage: submission.percentage,
+      message: !released
+        ? "Exam submitted successfully — results will be available after the exam window closes"
+        : hasTextQuestions
+          ? "Exam submitted — text answers pending coordinator review"
+          : "Exam submitted successfully",
+      ...(released
+        ? {
+            score: submission.score,
+            maxScore: submission.maxScore,
+            percentage: submission.percentage,
+          }
+        : {
+            resultsPending: true,
+            resultsReleaseAt:
+              examResultsReleaseAt(exam)?.toISOString() ?? null,
+          }),
       gradingStatus: hasTextQuestions ? "pending_review" : "completed",
     });
   } catch (error) {
@@ -498,7 +571,10 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
       studentId: user._id,
       status: { $in: ["submitted", "grading", "graded", "partially_graded", "locked"] },
     })
-      .populate("examId", "title description duration settings questions")
+      .populate(
+        "examId",
+        "title description duration scheduledAt endTime settings questions",
+      )
       .sort({ submittedAt: -1 })
       .lean();
 
@@ -511,6 +587,9 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
           percentage: isNaN(s.percentage) ? 0 : s.percentage,
           score: isNaN(s.score) ? 0 : s.score,
         };
+
+        // Results are hidden until the exam window closes (+5 min buffer).
+        gateResultsForStudent(cleaned, s.examId);
 
         // Strip correct answers if teacher disabled immediate results
         if (s.examId?.settings?.showResultsImmediately === false) {
@@ -568,9 +647,11 @@ router.get("/:id", verifyFirebaseToken, async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
-    // Sanitize for students: strip correct answers if showResultsImmediately is false
+    // Sanitize for students: hide scores until release, then strip correct
+    // answers if showResultsImmediately is false
     if (user.role === "student") {
       const submissionObj = submission.toObject();
+      gateResultsForStudent(submissionObj, submissionObj.examId);
       if (submissionObj.examId?.settings?.showResultsImmediately === false) {
         submissionObj.score = 0;
         submissionObj.percentage = 0;

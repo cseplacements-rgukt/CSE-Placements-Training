@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const request = require("supertest");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
 const mockVerifyIdToken = jest.fn();
 const mockCreateUser = jest.fn();
@@ -76,7 +77,7 @@ describe("Student roster & staff provisioning", () => {
       const res = await request(app)
         .post("/api/students")
         .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ idNumber: "S210574", name: "Anjali R", batchYear: 2025 });
+        .send({ idNumber: "S210574", name: "Anjali R", batchYear: 2025, password: "resPw01" });
 
       expect(res.status).toBe(201);
       expect(res.body.student.email).toBe("s210574@rguktsklm.ac.in");
@@ -90,7 +91,7 @@ describe("Student roster & staff provisioning", () => {
         const res = await request(app)
           .post("/api/students")
           .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-          .send({ idNumber: id, name: `Student ${id}`, batchYear: 2025 });
+          .send({ idNumber: id, name: `Student ${id}`, batchYear: 2025, password: "resPw02" });
         expect(res.status).toBe(201);
       }
     });
@@ -103,12 +104,12 @@ describe("Student roster & staff provisioning", () => {
       await request(app)
         .post("/api/students")
         .set(base)
-        .send({ idNumber: "s210574", name: "First", batchYear: 2025 });
+        .send({ idNumber: "s210574", name: "First", batchYear: 2025, password: "resPw03" });
 
       const res = await request(app)
         .post("/api/students")
         .set(base)
-        .send({ idNumber: "S210574", name: "Dup", batchYear: 2025 });
+        .send({ idNumber: "S210574", name: "Dup", batchYear: 2025, password: "resPw04" });
 
       expect(res.status).toBe(409);
     });
@@ -130,10 +131,10 @@ describe("Student roster & staff provisioning", () => {
     test("CSV bulk import creates students and skips duplicates", async () => {
       await authAs(superAdmin);
       const csv = [
-        "idnumber,name,batch",
-        "s220001,Bulk One,2026",
-        "s220002,Bulk Two,2026",
-        "s220001,Duplicate,2026",
+        "idnumber,name,batch,examcellpassword",
+        "s220001,Bulk One,2026,bulkPw1",
+        "s220002,Bulk Two,2026,bulkPw2",
+        "s220001,Duplicate,2026,other99",
       ].join("\n");
 
       const res = await request(app)
@@ -148,7 +149,7 @@ describe("Student roster & staff provisioning", () => {
   });
 
   // ─── Student login ──────────────────────────────────────────────────
-  describe("student login (ID/email + shared password)", () => {
+  describe("student login (ID/email + own exam-cell password)", () => {
     beforeEach(async () => {
       await User.create({
         firebaseUid: "roster:s210574",
@@ -156,34 +157,16 @@ describe("Student roster & staff provisioning", () => {
         name: "Anjali R",
         role: "student",
         idNumber: "S210574",
+        idNumberNormalized: "s210574",
         batchYear: 2025,
+        passwordHash: await bcrypt.hash("resPw01", 10),
       });
     });
 
-    const setPassword = () =>
-      request(app)
-        .put("/api/students/exam-cell-password")
-        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ password: "O3C6U" });
-
-    test("password must match the 3-letters+2-digits shape", async () => {
-      await authAs(superAdmin);
-      const bad = await request(app)
-        .put("/api/students/exam-cell-password")
-        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ password: "short" });
-      expect(bad.status).toBe(400);
-
-      const good = await setPassword();
-      expect(good.status).toBe(200);
-    });
-
     test("login by ID works case-insensitively and issues a usable token", async () => {
-      await setPassword();
-
       const res = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "S210574", password: "o3c6u" }); // lowercase pw OK
+        .send({ identifier: "S210574", password: "resPw01" });
 
       expect(res.status).toBe(200);
       expect(res.body.user.email).toBe("s210574@rguktsklm.ac.in");
@@ -199,44 +182,23 @@ describe("Student roster & staff provisioning", () => {
     });
 
     test("login by full college email resolves the same account", async () => {
-      await setPassword();
       const res = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "s210574@rguktsklm.ac.in", password: "O3C6U" });
+        .send({ identifier: "s210574@rguktsklm.ac.in", password: "resPw01" });
       expect(res.status).toBe(200);
     });
 
-    test("wrong or unset password rejected with direct message", async () => {
-      const noPwYet = await request(app)
+    test("password is case-sensitive bcrypt, wrong password rejected", async () => {
+      const wrongCase = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "s210574", password: "O3C6U" });
-      expect(noPwYet.status).toBe(401);
+        .send({ identifier: "s210574", password: "respw01" });
+      expect(wrongCase.status).toBe(401);
 
-      await setPassword();
       const bad = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "s210574", password: "Z9Z9Z" });
+        .send({ identifier: "s210574", password: "zzzzz99" });
       expect(bad.status).toBe(401);
       expect(bad.body.message).toMatch(/incorrect/i);
-    });
-
-    test("rotating the password invalidates the old one", async () => {
-      await setPassword();
-      const rotate = await request(app)
-        .put("/api/students/exam-cell-password")
-        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ password: "NEW12" });
-      expect(rotate.status).toBe(200);
-
-      const oldPw = await request(app)
-        .post("/api/auth/student-login")
-        .send({ identifier: "s210574", password: "O3C6U" });
-      expect(oldPw.status).toBe(401);
-
-      const newPw = await request(app)
-        .post("/api/auth/student-login")
-        .send({ identifier: "s210574", password: "new12" });
-      expect(newPw.status).toBe(200);
     });
   });
 
@@ -263,7 +225,7 @@ describe("Student roster & staff provisioning", () => {
       expect(wrong.status).toBe(401);
     });
 
-    test("CSV import accepts a per-row password column and hashes it", async () => {
+    test("CSV import hashes each student's own password; rows without one are rejected", async () => {
       await authAs(superAdmin);
       const csv = [
         "idnumber,name,batch,examcellpassword",
@@ -276,22 +238,20 @@ describe("Student roster & staff provisioning", () => {
         .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
         .send({ csv });
       expect(res.status).toBe(200);
-      expect(res.body.results.created).toBe(2);
+      expect(res.body.results.created).toBe(1);
+      expect(res.body.results.errors).toHaveLength(1);
+      expect(res.body.results.errors[0].message).toMatch(/password/i);
 
       const withPw = await request(app)
         .post("/api/auth/student-login")
         .send({ identifier: "s240002", password: "colPw12" });
       expect(withPw.status).toBe(200);
 
-      // Row without a password falls back to the shared exam-cell password.
-      await request(app)
-        .put("/api/students/exam-cell-password")
-        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ password: "O3C6U" });
-      const fallback = await request(app)
+      // Without an individual password there is no fallback — login fails.
+      const noPw = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "s240003", password: "o3c6u" });
-      expect(fallback.status).toBe(200);
+        .send({ identifier: "s240003", password: "anything1" });
+      expect(noPw.status).toBe(401);
     });
 
     test("admin can reset one student's password via the API", async () => {
@@ -375,6 +335,7 @@ describe("Student roster & staff provisioning", () => {
         role: "student",
         idNumber: "s230001",
         batchYear: 2027,
+        passwordHash: await bcrypt.hash("resPw05", 10),
       });
       await Submission.create({
         studentId: student._id,
@@ -466,13 +427,9 @@ describe("Student roster & staff provisioning", () => {
       });
 
       // Roster student signs in and starts the exam with their JWT.
-      await request(app)
-        .put("/api/students/exam-cell-password")
-        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
-        .send({ password: "O3C6U" });
       const login = await request(app)
         .post("/api/auth/student-login")
-        .send({ identifier: "s230001", password: "O3C6U" });
+        .send({ identifier: "s230001", password: "resPw05" });
       expect(login.status).toBe(200);
 
       const start = await request(app)
@@ -630,26 +587,8 @@ describe("Student roster & staff provisioning", () => {
       expect(payload.uid).toBe("roster:x1");
     });
 
-    // ── Staff Google sign-in binding (Fix: restore Google for staff) ──
-    test("binds a Google identity to a provisioned staff account by email", async () => {
-      mockVerifyIdToken.mockResolvedValue({
-        uid: "google_uid_for_admin",
-        email: "admin2@test.com",
-      });
-      const res = await request(app)
-        .get("/api/auth/me")
-        .set("Authorization", "Bearer google-token");
-
-      expect(res.status).toBe(200);
-      expect(res.body.user.role).toBe("admin");
-
-      // Binding persisted — the new uid now resolves directly.
-      const bound = await User.findOne({ firebaseUid: "google_uid_for_admin" });
-      expect(bound).toBeTruthy();
-      expect(String(bound._id)).toBe(String(plainAdmin._id));
-    });
-
-    test("never binds a Google identity to a student roster account", async () => {
+    // ── No alternate identity binding (Google sign-in removed) ──
+    test("unknown Firebase identity does NOT bind to an account by matching email", async () => {
       await User.create({
         firebaseUid: "roster:s999999",
         email: "s999999@rguktsklm.ac.in",
@@ -668,6 +607,19 @@ describe("Student roster & staff provisioning", () => {
       expect(res.status).toBe(404);
       const unchanged = await User.findOne({ email: "s999999@rguktsklm.ac.in" });
       expect(unchanged.firebaseUid).toBe("roster:s999999");
+    });
+
+    test("unknown Firebase identity sharing a STAFF email is rejected too", async () => {
+      mockVerifyIdToken.mockResolvedValue({
+        uid: "random_google_uid",
+        email: "admin2@test.com",
+      });
+      const res = await request(app)
+        .get("/api/auth/me")
+        .set("Authorization", "Bearer google-token");
+      expect(res.status).toBe(404);
+      const bound = await User.findOne({ firebaseUid: "random_google_uid" });
+      expect(bound).toBeNull();
     });
   });
 });

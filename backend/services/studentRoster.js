@@ -42,8 +42,8 @@ async function hashRosterPassword(password) {
  * @param {string} opts.idNumber
  * @param {string} opts.name
  * @param {number|string} opts.batchYear
- * @param {string} [opts.password] - student's individual exam-cell password;
- *   omitted/empty means the account starts on the legacy shared password.
+ * @param {string} opts.password - student's individual exam-cell password;
+ *   required — every account gets its own college-issued credential.
  * @returns {Promise<Object>} created student document
  */
 async function addStudentToRoster({ idNumber, name, batchYear, password }) {
@@ -56,6 +56,12 @@ async function addStudentToRoster({ idNumber, name, batchYear, password }) {
   const year = parseInt(batchYear);
   if (!year || year < 2000 || year > 2100) {
     throw new RosterError(400, "A valid batch year is required");
+  }
+  if (!String(password || "").trim()) {
+    throw new RosterError(
+      400,
+      "Each student needs their own exam-cell password",
+    );
   }
 
   // No format/prefix validation on purpose: campus-origin letters vary

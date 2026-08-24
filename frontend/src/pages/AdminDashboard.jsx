@@ -153,6 +153,7 @@ const AdminDashboard = () => {
     idNumber: "",
     name: "",
     batchYear: String(new Date().getFullYear()),
+    password: "",
   });
   const [csvText, setCsvText] = useState("");
   const [showCsvImport, setShowCsvImport] = useState(false);
@@ -160,11 +161,6 @@ const AdminDashboard = () => {
   const [rosterMessage, setRosterMessage] = useState(null);
   const [deleteBatchYear, setDeleteBatchYear] = useState("");
   const [deleteBatchConfirm, setDeleteBatchConfirm] = useState("");
-
-  // ── Exam-cell password state ──────────────────────────────────────────
-  const [pwStatus, setPwStatus] = useState(null);
-  const [pwInput, setPwInput] = useState("");
-  const [pwMessage, setPwMessage] = useState(null);
 
   // ── Proctoring review state ───────────────────────────────────────────
   const [activeSessions, setActiveSessions] = useState([]);
@@ -187,7 +183,6 @@ const AdminDashboard = () => {
     if (activeTab === "students") {
       fetchStudents();
       fetchBatches();
-      fetchPasswordStatus();
     }
     if (activeTab === "proctoring") fetchProctoringData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -379,15 +374,6 @@ const AdminDashboard = () => {
     }
   };
 
-  const fetchPasswordStatus = async () => {
-    try {
-      const authToken = await token();
-      setPwStatus(await adminService.getPasswordStatus(authToken));
-    } catch (err) {
-      console.error("Error loading password status:", err);
-    }
-  };
-
   const handleAddStudent = async (e) => {
     e.preventDefault();
     try {
@@ -398,7 +384,7 @@ const AdminDashboard = () => {
         "success",
         `${data.student.name} (${data.student.email}) added`,
       );
-      setNewStudent((prev) => ({ ...prev, idNumber: "", name: "" }));
+      setNewStudent((prev) => ({ ...prev, idNumber: "", name: "", password: "" }));
       fetchStudents();
       fetchBatches();
     } catch (err) {
@@ -492,55 +478,6 @@ const AdminDashboard = () => {
       showRosterMessage("error", err.response?.data?.message || "Batch deletion failed");
     } finally {
       setRosterBusy(false);
-    }
-  };
-
-  // ─── Exam-cell password ─────────────────────────────────────────────
-  const isValidExamCellPasswordShape = (value) => {
-    const p = value.trim();
-    return (
-      p.length === 5 &&
-      (p.match(/[A-Za-z]/g) || []).length === 3 &&
-      (p.match(/[0-9]/g) || []).length === 2
-    );
-  };
-
-  const handleGeneratePassword = async () => {
-    try {
-      const authToken = await token();
-      const data = await adminService.generateExamCellPassword(authToken);
-      setPwInput(data.password);
-      setPwMessage({
-        type: "info",
-        text: "Generated a suggested password — press Save to apply it.",
-      });
-    } catch {
-      setPwMessage({ type: "error", text: "Generation failed" });
-    }
-  };
-
-  const handleSavePassword = async () => {
-    if (!isValidExamCellPasswordShape(pwInput)) {
-      setPwMessage({
-        type: "error",
-        text: "Format: exactly 5 characters — 3 letters and 2 digits (e.g. O3C6U).",
-      });
-      return;
-    }
-    try {
-      const authToken = await token();
-      const data = await adminService.setExamCellPassword(authToken, pwInput.trim());
-      setPwMessage({
-        type: "success",
-        text: `${data.message}. Share it with students through your usual channel.`,
-      });
-      setPwInput("");
-      fetchPasswordStatus();
-    } catch (err) {
-      setPwMessage({
-        type: "error",
-        text: err.response?.data?.message || "Save failed",
-      });
     }
   };
 
@@ -813,52 +750,12 @@ const AdminDashboard = () => {
           <section>
             <h2 className="text-[18px] font-semibold text-ink">Student Roster</h2>
             <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-ink-muted">
-              Students sign in with their ID number (or college email) plus the shared exam-cell password.
-              IDs are accepted in any format — no prefix checks.
+              Students sign in with their ID number (or college email) plus their
+              own college exam-cell password — the same one they already use for
+              semester results. Every account must be created with that password.
             </p>
 
             {inlineMessage(rosterMessage)}
-
-            {/* Exam-cell password card */}
-            <Card className="mt-4">
-              <CardHeader>
-                <CardTitle>Shared Exam Cell Password (fallback only)</CardTitle>
-                <p className="mt-1 text-[13px] text-ink-muted">
-                  Preferred: give each student their own password via CSV import
-                  or the per-student reset. This shared password is checked only
-                  for students imported without an individual one.{" "}
-                  {pwStatus?.configured
-                    ? `Currently configured${pwStatus.updatedAt ? ` (last updated ${new Date(pwStatus.updatedAt).toLocaleString()})` : ""}.`
-                    : "Not set."}
-                </p>
-              </CardHeader>
-              <CardBody className="pt-0">
-                <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
-                  <input
-                    type="text"
-                    placeholder="3 letters + 2 digits (e.g. O3C6U)"
-                    value={pwInput}
-                    maxLength={5}
-                    onChange={(e) => setPwInput(e.target.value.toUpperCase())}
-                    aria-label="New exam cell password"
-                    className="h-9 w-full rounded-sm border border-line bg-surface px-3 font-mono uppercase tracking-widest text-sm text-ink placeholder:font-sans placeholder:tracking-normal placeholder:normal-case placeholder:text-stone-400 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 sm:w-64"
-                  />
-                  <div className="flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={handleGeneratePassword} type="button">
-                      Generate
-                    </Button>
-                    <Button size="sm" onClick={handleSavePassword} type="button">
-                      Save / Rotate
-                    </Button>
-                  </div>
-                </div>
-                {pwMessage && (
-                  <p role="status" className={`mt-2 text-[13px] ${pwMessage.type === "error" ? "text-danger" : pwMessage.type === "success" ? "text-success" : "text-info"}`}>
-                    {pwMessage.text}
-                  </p>
-                )}
-              </CardBody>
-            </Card>
 
             {/* Add single student */}
             <form onSubmit={handleAddStudent} className="mt-4 flex flex-col gap-2.5 rounded-md border border-line bg-surface p-4 shadow-sm lg:flex-row lg:items-end">
@@ -869,6 +766,7 @@ const AdminDashboard = () => {
                   <option key={y} value={y}>{y}</option>
                 ))}
               </Select>
+              <Input label="Exam-cell password" placeholder="Their college password" type="text" value={newStudent.password} onChange={(e) => setNewStudent({ ...newStudent, password: e.target.value })} required />
               <div className="shrink-0">
                 <Button type="submit" disabled={rosterBusy}>
                   Add Student
@@ -882,12 +780,18 @@ const AdminDashboard = () => {
                 {showCsvImport ? "Hide CSV import" : "Bulk import (CSV)"}
               </Button>
               <span className="text-[13px] text-ink-muted">
-                CSV columns: ID number, Name, Batch year, Exam-cell password — each student uses their own college password (header row optional)
+                CSV columns (all required): ID number, Name, Batch year, Exam-cell password — use each student's existing college password
               </span>
             </div>
 
             {showCsvImport && (
               <div className="mt-3 space-y-2.5 rounded-md border border-line bg-surface p-4 shadow-sm">
+                <p className="text-[13px] leading-relaxed text-ink-muted">
+                  One student per line, comma-separated:{" "}
+                  <code className="rounded-sm bg-stone-100 px-1 py-0.5 font-mono text-[12px] text-ink">ID number, Name, Batch year, Exam-cell password</code>.
+                  The password is the one the college already issued for results — type it exactly as issued.
+                  A header row is optional; rows missing a password are rejected.
+                </p>
                 <input
                   type="file"
                   accept=".csv,text/csv,text/plain"

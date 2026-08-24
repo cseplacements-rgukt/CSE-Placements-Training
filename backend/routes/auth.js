@@ -9,9 +9,6 @@ const Notification = require("../models/Notification");
 const verifyFirebaseToken = require("../middleware/auth");
 const { signStudentToken } = require("../middleware/auth");
 const { authLimiter, preAuthLimiter } = require("../middleware/rateLimiter");
-const {
-  verifyExamCellPassword,
-} = require("../utils/examCellPassword");
 
 const MAX_REGISTRATION_ATTEMPTS = 3;
 const REGISTRATION_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -133,12 +130,15 @@ router.post("/student-login", preAuthLimiter, async (req, res) => {
       return res.status(401).json({ message: "ID/email or password incorrect" });
     }
 
-    // Each student's OWN college exam-cell password takes priority; students
-    // imported before per-student passwords still verify against the legacy
-    // shared exam-cell password.
-    const passwordOk = user.passwordHash
-      ? await bcrypt.compare(String(password), user.passwordHash)
-      : await verifyExamCellPassword(password);
+    // Every roster student has their own college exam-cell password
+    // (bcrypt-hashed at import time). No shared/fallback credential exists.
+    if (!user.passwordHash) {
+      return res.status(401).json({
+        message:
+          "No individual password is set for this ID — contact the placement cell to get your exam-cell password added.",
+      });
+    }
+    const passwordOk = await bcrypt.compare(String(password), user.passwordHash);
 
     if (!passwordOk) {
       await LoginAttempt.create({
@@ -182,29 +182,6 @@ router.get("/me", verifyFirebaseToken, async (req, res) => {
     let user = await User.findOne({ firebaseUid: req.user.uid }).select(
       "-twoFactorSecret",
     );
-
-    // Staff may sign in with Google instead of their provisioned password.
-    // That creates a DIFFERENT Firebase Auth identity (different uid) whose
-    // email matches the provisioned account. Bind it on first sight so the
-    // rest of the API's uid lookups keep working. Roster-student tokens are
-    // explicitly excluded — a Google identity must never resolve to a
-    // student account or the shared exam-cell password would be bypassable.
-    if (
-      !user &&
-      req.user.authType !== "student-roster" &&
-      req.user.email
-    ) {
-      const candidate = await User.findOne({
-        email: String(req.user.email).toLowerCase(),
-        role: { $ne: "student" },
-      }).select("-twoFactorSecret");
-      if (candidate && candidate.isActive) {
-        candidate.firebaseUid = req.user.uid;
-        candidate.lastLogin = new Date();
-        await candidate.save();
-        return res.json({ user: candidate });
-      }
-    }
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });

@@ -74,16 +74,18 @@ const examCodeLimiter = rateLimit({
 });
 
 // IP-based limiter for the three PRE-AUTH routes (/auth/check-registration,
-// /auth/login-status, /auth/login-failure). These run before Firebase auth, so
-// there is no user identity yet and per-IP is the only available key.
+// /auth/login-status, /auth/login-failure, /auth/detect-account,
+// /auth/student-login). These run before Firebase auth, so there is no user
+// identity yet and per-IP is the only available key.
 //
-// Sizing note: a campus NAT means hundreds of students can legitimately share
-// one public IP on registration/login day. 100 per 15 min comfortably absorbs
-// whole-cohort login-screen traffic while still stopping scripted
-// email-enumeration loops (which issue thousands of calls).
+// Sizing note: a campus NAT means hundreds of students share one public IP.
+// A 200-student cohort logging in within minutes generates 400+ pre-auth
+// calls (detect-account + student-login per student, plus retries), so the
+// cap must sit well above that while still stopping scripted
+// email-enumeration loops (which issue thousands of calls per minute).
 const preAuthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 1000,
   keyGenerator: (req) => ipKeyGenerator(req.ip),
   message: 'Too many requests from this network, please try again later.',
   standardHeaders: true,

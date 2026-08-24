@@ -37,6 +37,12 @@ const signStudentToken = (user) =>
       email: user.email,
       role: "student",
       authType: "student-roster",
+      // Extended claims so hot routes (/start, /auto-save, submit) can build
+      // identity snapshots WITHOUT hitting Mongo. undefined values are
+      // omitted from the token automatically.
+      name: user.name || undefined,
+      idNumber: user.idNumber || undefined,
+      batchYear: user.batchYear ?? undefined,
     },
     JWT_SECRET,
     { subject: String(user._id), expiresIn: STUDENT_TOKEN_TTL },

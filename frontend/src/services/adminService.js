@@ -110,31 +110,4 @@ export const adminService = {
     );
     return response.data;
   },
-
-  // ─── Exam-cell password ───────────────────────────────────────────────
-  getPasswordStatus: async (token) => {
-    const response = await axios.get(
-      `${API_URL}/students/exam-cell-password/status`,
-      authHeader(token),
-    );
-    return response.data;
-  },
-
-  setExamCellPassword: async (token, password) => {
-    const response = await axios.put(
-      `${API_URL}/students/exam-cell-password`,
-      { password },
-      authHeader(token),
-    );
-    return response.data;
-  },
-
-  generateExamCellPassword: async (token) => {
-    const response = await axios.post(
-      `${API_URL}/students/exam-cell-password/generate`,
-      {},
-      authHeader(token),
-    );
-    return response.data;
-  },
 };

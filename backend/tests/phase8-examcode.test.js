@@ -6,14 +6,32 @@ const User = require("../models/User");
 const Question = require("../models/Question");
 const Submission = require("../models/Submission");
 
-jest.mock("../middleware/auth", () => (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (token === "valid-tnpc-token") req.user = { uid: "tnpc123" };
-  else if (token === "valid-tnpc2-token") req.user = { uid: "tnpc456" };
-  else if (token === "valid-student-token") req.user = { uid: "student123" };
-  else if (token === "valid-student2-token") req.user = { uid: "student456" };
-  else return res.status(403).json({ message: "Invalid token" });
-  next();
+jest.mock("../middleware/auth", () => {
+  const User = require("../models/User");
+  return async (req, res, next) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    const uidMap = {
+      "valid-tnpc-token": "tnpc123",
+      "valid-tnpc2-token": "tnpc456",
+      "valid-student-token": "student123",
+      "valid-student2-token": "student456",
+    };
+    const uid = uidMap[token];
+    if (!uid) return res.status(403).json({ message: "Invalid token" });
+    const user = await User.findOne({ firebaseUid: uid });
+    if (!user) return res.status(403).json({ message: "Invalid token" });
+    req.user = {
+      uid,
+      email: user.email,
+      role: user.role,
+      authType: user.role === "student" ? "student-roster" : undefined,
+      studentId: user.role === "student" ? String(user._id) : undefined,
+      name: user.name || undefined,
+      idNumber: user.idNumber || undefined,
+      batchYear: user.batchYear ?? undefined,
+    };
+    next();
+  };
 });
 
 describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal", () => {

@@ -30,7 +30,6 @@ const {
   RosterError,
 } = require("../services/studentRoster");
 const { getOrCreateFirebaseUser } = require("../services/accountBootstrap");
-const { setExamCellPassword, generateExamCellPassword } = require("../utils/examCellPassword");
 const { ROLE_ALIASES } = require("../models/User");
 
 // Simple shared password handed to every seeded staff account (super admin,
@@ -51,13 +50,13 @@ const COORDINATORS = [
   { name: "Arjun Reddy", email: "coord2@modugo.test", role: "coordinator" },
   { name: "Meena Iyer", email: "coord3@modugo.test", role: "coordinator" },
 ];
+// Demo students with their college exam-cell passwords hardcoded — in real
+// use the placement cell imports the actual issued passwords via CSV.
 const STUDENTS = [
-  { idNumber: "S260101", name: "Lakshmi Prasanna", batchYear: 2026 },
-  { idNumber: "S260102", name: "Vamshi Krishna", batchYear: 2026 },
-  { idNumber: "S260103", name: "Harika Chowdary", batchYear: 2026 },
+  { idNumber: "S260101", name: "Lakshmi Prasanna", batchYear: 2026, password: "LX4PQ" },
+  { idNumber: "S260102", name: "Vamshi Krishna", batchYear: 2026, password: "VK7RM" },
+  { idNumber: "S260103", name: "Harika Chowdary", batchYear: 2026, password: "HC2NT" },
 ];
-// Format rule: exactly 5 chars, 3 letters + 2 digits in any order.
-const EXAM_CELL_PASSWORD = "A1B2C";
 
 const credentials = [];
 const notes = [];
@@ -160,15 +159,12 @@ async function seedStaff(list, label) {
 
 async function seedStudents() {
   for (const spec of STUDENTS) {
-    // Students sign in with their college exam-cell style password:
-    // 5 chars, 3 letters + 2 digits, generated per student.
-    const studentPassword = generateExamCellPassword();
     try {
-      const student = await addStudentToRoster({ ...spec, password: studentPassword });
+      const student = await addStudentToRoster(spec);
       notes.push(
         `student ${student.idNumber}: roster email ${student.email}`,
       );
-      credentials.push(["student", student.email, studentPassword]);
+      credentials.push(["student", student.email, spec.password]);
     } catch (error) {
       if (error instanceof RosterError && error.status === 409) {
         notes.push(
@@ -205,9 +201,6 @@ async function main() {
   await seedStaff(ADMINS, "admin");
   await seedStaff(COORDINATORS, "coordinator");
   await seedStudents();
-
-  await setExamCellPassword(EXAM_CELL_PASSWORD);
-  console.log(`Exam-cell password set to: ${EXAM_CELL_PASSWORD}\n`);
 
   console.log("Notes:");
   notes.forEach((n) => console.log(`  • ${n}`));
