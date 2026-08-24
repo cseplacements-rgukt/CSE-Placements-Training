@@ -2,7 +2,6 @@ const request = require("supertest");
 const app = require("../server");
 const Exam = require("../models/Exam");
 const User = require("../models/User");
-const Question = require("../models/Question");
 
 jest.mock("../middleware/auth", () => (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
@@ -399,10 +398,7 @@ describe("Collaborative Exam Creation Workflow", () => {
       expect(res.status).toBe(201);
       expect(res.body.addedQuestion.contentType).toBe("code");
       expect(res.body.addedQuestion.codeSnippet.language).toBe("javascript");
-
-      const qbDoc = await Question.findById(res.body.addedQuestion.questionBankId);
-      expect(qbDoc.contentType).toBe("code");
-      expect(qbDoc.codeSnippet.code).toBe("console.log(2 + 2)");
+      expect(res.body.addedQuestion.codeSnippet.code).toBe("console.log(2 + 2)");
     });
   });
 

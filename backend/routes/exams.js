@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 const Exam = require("../models/Exam");
 const { generateExamCode, EDITABLE_STATUSES } = require("../models/Exam");
-const Question = require("../models/Question");
 const User = require("../models/User");
 const Submission = require("../models/Submission");
 const verifyFirebaseToken = require("../middleware/auth");
@@ -917,7 +916,7 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
     const {
       type, question, options, correctAnswer, modelAnswer,
       points, explanation, constraints, imageUrl,
-      contentType, codeSnippet, sectionId, questionBankId,
+      contentType, codeSnippet, sectionId,
       category, topic, targetCompany, tags,
     } = req.body;
 
@@ -949,148 +948,32 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
       resolvedSectionId = section._id;
     }
 
-    // Check for duplicate questionBankId in this exam
-    if (questionBankId) {
-      const hasDuplicate = exam.questions.some(
-        (q) => q.questionBankId && q.questionBankId.toString() === questionBankId.toString()
-      );
-      if (hasDuplicate) {
-        return res.status(400).json({ message: "This question is already in the exam." });
-      }
-    }
+    // ── Same-exam duplicate detection ────────────────────────────────
+    // The shared question bank was removed: questions live ONLY embedded in
+    // their exam. A question with the same text (case/whitespace-insensitive)
+    // already present in THIS exam is flagged so the author can replace it
+    // (replaceExisting: true updates that snapshot in place) or skip it.
+    const normalizeText = (s) => String(s).trim().replace(/\s+/g, " ").toLowerCase();
+    const normalizedNew = normalizeText(question);
+    const existingIndex = exam.questions.findIndex(
+      (q) => normalizeText(q.question) === normalizedNew
+    );
 
-    // If no questionBankId, create a Question Bank record first
     const replaceExisting = req.body.replaceExisting === true;
-    let wasReplaced = false;
-    let resolvedQBId = questionBankId || null;
-    if (!resolvedQBId) {
-      // Duplicate detection: same question text (case/whitespace-insensitive)
-      // for the same target company already exists in the bank → flag it and
-      // let the author choose to replace it or keep the existing one.
-      const escaped = String(question).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const duplicateQb = await Question.findOne({
-        question: { $regex: `^\\s*${escaped}\\s*$`, $options: "i" },
-        targetCompany: targetCompany || "General",
-      });
 
-      if (duplicateQb) {
-        const inThisExam = exam.questions.some(
-          (q) => q.questionBankId && q.questionBankId.toString() === duplicateQb._id.toString()
-        );
-
-        if (!replaceExisting) {
-          return res.status(409).json({
-            message: inThisExam
-              ? "A question with this exact text already exists in this exam."
-              : "A question with this exact text already exists in the question bank.",
-            conflict: {
-              questionBankId: duplicateQb._id,
-              question: duplicateQb.question,
-              targetCompany: duplicateQb.targetCompany,
-              createdAt: duplicateQb.createdAt,
-              inExam: inThisExam,
-            },
-          });
-        }
-
-        // Replace: overwrite the existing bank record with the new content
-        await Question.findByIdAndUpdate(duplicateQb._id, {
-          type,
-          question,
-          contentType: contentType === "code" ? "code" : "text",
-          codeSnippet: {
-            code: codeSnippet?.code || "",
-            language: codeSnippet?.language || "plaintext",
-          },
-          options: type === "mcq" ? options.filter(o => o.trim()) : [],
-          correctAnswer,
-          modelAnswer: modelAnswer || "",
-          points: points || 1,
-          explanation: explanation || "",
-          constraints: constraints || { wordLimit: null, difficultyLevel: "medium" },
-          imageUrl: imageUrl || "",
-          category: category || "Aptitude",
-          topic: topic || "",
-          targetCompany: targetCompany || "General",
-          tags: tags || [],
-        });
-
-        // If the replaced question is embedded in this exam, refresh that snapshot too
-        if (inThisExam) {
-          await Exam.updateOne(
-            { _id: exam._id, "questions.questionBankId": duplicateQb._id },
-            {
-              $set: {
-                "questions.$.type": type,
-                "questions.$.question": question,
-                "questions.$.contentType": contentType === "code" ? "code" : "text",
-                "questions.$.codeSnippet": {
-                  code: codeSnippet?.code || "",
-                  language: codeSnippet?.language || "plaintext",
-                },
-                "questions.$.options":
-                  type === "mcq" || type === "true_false" ? (options || []).filter(o => o.trim()) : [],
-                "questions.$.correctAnswer": correctAnswer,
-                "questions.$.modelAnswer": modelAnswer || "",
-                "questions.$.points": points || 1,
-                "questions.$.explanation": explanation || "",
-                "questions.$.imageUrl": imageUrl || "",
-                "questions.$.constraints": constraints || { wordLimit: null, difficultyLevel: "medium" },
-                updatedAt: new Date(),
-              },
-            }
-          );
-          const updated = await Exam.findById(exam._id);
-          return res.status(200).json({
-            exam: updated,
-            replaced: true,
-            addedQuestion: updated.questions.find(
-              (q) => q.questionBankId && q.questionBankId.toString() === duplicateQb._id.toString()
-            ),
-            message: "Existing question replaced successfully.",
-          });
-        }
-
-        // Not yet in this exam: attach a fresh snapshot pointing at the
-        // (now-updated) existing bank record instead of creating another one.
-        resolvedQBId = duplicateQb._id;
-        wasReplaced = true;
-      }
-    }
-
-    if (!resolvedQBId) {
-      const qbRecord = new Question({
-        type,
-        question,
-        contentType: contentType === "code" ? "code" : "text",
-        codeSnippet: {
-          code: codeSnippet?.code || "",
-          language: codeSnippet?.language || "plaintext",
+    if (existingIndex !== -1 && !replaceExisting) {
+      return res.status(409).json({
+        message: "A question with this exact text already exists in this exam.",
+        conflict: {
+          questionId: exam.questions[existingIndex]._id,
+          question: exam.questions[existingIndex].question,
+          index: existingIndex,
+          inExam: true,
         },
-        options: type === "mcq" ? options.filter(o => o.trim()) : [],
-        correctAnswer,
-        modelAnswer: modelAnswer || "",
-        points: points || 1,
-        explanation: explanation || "",
-        constraints: constraints || { wordLimit: null, difficultyLevel: "medium" },
-        imageUrl: imageUrl || "",
-        category: category || "Aptitude",
-        topic: topic || "",
-        targetCompany: targetCompany || "General",
-        tags: tags || [],
-        createdBy: user._id,
       });
-      await qbRecord.save();
-      resolvedQBId = qbRecord._id;
     }
 
-    // Use Date.now() for order to guarantee uniqueness under concurrent writes.
-    // Two adds in the exact same millisecond are exceedingly rare and would still
-    // be deterministic via _id sort.
-    const orderValue = Date.now();
-
-    // Atomically push question snapshot to exam
-    const questionSnapshot = {
+    const buildSnapshot = (orderValue) => ({
       type,
       question,
       contentType: contentType === "code" ? "code" : "text",
@@ -1105,12 +988,38 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
       explanation: explanation || "",
       order: orderValue,
       imageUrl: imageUrl || "",
-      questionBankId: resolvedQBId,
       sectionId: resolvedSectionId,
       createdBy: user._id,
       createdByName: user.name || "",
       constraints: constraints || { wordLimit: null, difficultyLevel: "medium" },
-    };
+    });
+
+    if (existingIndex !== -1) {
+      // Replace: update the embedded snapshot in place — no second entry.
+      const set = { updatedAt: new Date() };
+      for (const [key, value] of Object.entries(buildSnapshot(Date.now()))) {
+        set[`questions.${existingIndex}.${key}`] = value;
+      }
+      const updated = await Exam.findByIdAndUpdate(
+        exam._id,
+        { $set: set },
+        { new: true }
+      );
+      return res.status(200).json({
+        exam: updated,
+        replaced: true,
+        addedQuestion: updated.questions[existingIndex],
+        message: "Existing question replaced.",
+      });
+    }
+
+    // Use Date.now() for order to guarantee uniqueness under concurrent writes.
+    // Two adds in the exact same millisecond are exceedingly rare and would still
+    // be deterministic via _id sort.
+    const orderValue = Date.now();
+
+    // Atomically push question snapshot to exam
+    const questionSnapshot = buildSnapshot(orderValue);
 
     const updated = await Exam.findByIdAndUpdate(
       exam._id,
@@ -1121,9 +1030,7 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
     res.status(201).json({
       exam: updated,
       addedQuestion: updated.questions[updated.questions.length - 1],
-      ...(wasReplaced
-        ? { replaced: true, message: "Existing question replaced and added to exam." }
-        : { message: "Question added to exam successfully" }),
+      message: "Question added to exam successfully",
     });
   } catch (error) {
     console.error("Error adding question to exam:", error);

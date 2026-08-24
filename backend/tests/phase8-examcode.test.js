@@ -3,7 +3,6 @@ const app = require("../server");
 const Exam = require("../models/Exam");
 const { generateExamCode } = require("../models/Exam");
 const User = require("../models/User");
-const Question = require("../models/Question");
 const Submission = require("../models/Submission");
 
 jest.mock("../middleware/auth", () => {
@@ -187,7 +186,7 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
 
   // ── 3. ATOMIC QUESTION OPERATIONS (Collaborative Builder) ──────────────────
   describe("Collaborative Builder - Atomic Question Operations", () => {
-    it("11. POST /api/exams/:examId/questions atomically pushes question and creates QB entry", async () => {
+    it("11. POST /api/exams/:examId/questions atomically pushes an embedded question (no bank)", async () => {
       const res = await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
         .set("Authorization", "Bearer valid-tnpc-token")
@@ -202,139 +201,89 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
       expect(res.status).toBe(201);
       expect(res.body.exam.questions).toHaveLength(2);
       expect(res.body.addedQuestion.question).toBe("New MCQ Question");
-      expect(res.body.addedQuestion.questionBankId).toBeDefined();
-
-      // Check QB entry created
-      const qbDoc = await Question.findById(res.body.addedQuestion.questionBankId);
-      expect(qbDoc).not.toBeNull();
-      expect(qbDoc.question).toBe("New MCQ Question");
+      // The shared question bank is gone — snapshots are self-contained.
+      expect(res.body.addedQuestion.questionBankId).toBeNull();
     });
 
-    it("12. Atomically adding QB existing question references questionBankId", async () => {
-      const qbQuestion = await Question.create({
-        type: "short_answer",
-        question: "QB Question",
-        correctAnswer: "Answer",
-        createdBy: tnpcAdmin._id
-      });
-
+    it("12. Stale/unknown questionBankId in payload is ignored", async () => {
       const res = await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
         .set("Authorization", "Bearer valid-tnpc-token")
         .send({
           type: "short_answer",
-          question: "QB Question",
+          question: "Payload With Bank Id",
           correctAnswer: "Answer",
-          questionBankId: qbQuestion._id
+          questionBankId: "507f1f77bcf86cd799439011"
         });
 
       expect(res.status).toBe(201);
-      expect(res.body.addedQuestion.questionBankId).toBe(qbQuestion._id.toString());
+      expect(res.body.addedQuestion.questionBankId).toBeNull();
     });
 
-    it("13. Prevents adding duplicate Question Bank question to same exam", async () => {
-      const qbQuestion = await Question.create({
-        type: "short_answer",
-        question: "QB Unique Question",
-        correctAnswer: "Answer",
-        createdBy: tnpcAdmin._id
-      });
+    it("13. Prevents adding the same question text to the same exam", async () => {
+      const send = (question) =>
+        request(app)
+          .post(`/api/exams/${draftExam._id}/questions`)
+          .set("Authorization", "Bearer valid-tnpc-token")
+          .send({ type: "short_answer", question, correctAnswer: "Answer" });
 
-      await request(app)
-        .post(`/api/exams/${draftExam._id}/questions`)
-        .set("Authorization", "Bearer valid-tnpc-token")
-        .send({
-          type: "short_answer",
-          question: "QB Unique Question",
-          correctAnswer: "Answer",
-          questionBankId: qbQuestion._id
-        });
+      expect((await send("Unique Text Question")).status).toBe(201);
 
-      // Try adding again
-      const res = await request(app)
-        .post(`/api/exams/${draftExam._id}/questions`)
-        .set("Authorization", "Bearer valid-tnpc-token")
-        .send({
-          type: "short_answer",
-          question: "QB Unique Question",
-          correctAnswer: "Answer",
-          questionBankId: qbQuestion._id
-        });
-
-      expect(res.status).toBe(400);
-      expect(res.body.message).toContain("already in the exam");
+      const res = await send("Unique Text Question");
+      expect(res.status).toBe(409);
+      expect(res.body.message).toContain("already exists in this exam");
     });
 
-    it("13a. Flags duplicate question text and does not create a second bank record", async () => {
-      await Question.create({
-        type: "mcq",
-        question: "What is 2 + 2?",
-        options: ["3", "4", "5", "6"],
-        correctAnswer: "4",
-        targetCompany: "TCS",
-        createdBy: tnpcAdmin._id
-      });
+    it("13a. Flags duplicate question text case-insensitively within this exam", async () => {
+      const send = (question) =>
+        request(app)
+          .post(`/api/exams/${draftExam._id}/questions`)
+          .set("Authorization", "Bearer valid-tnpc-token")
+          .send({
+            type: "mcq",
+            question,
+            options: ["3", "4", "5", "6"],
+            correctAnswer: "4",
+          });
 
-      const res = await request(app)
-        .post(`/api/exams/${draftExam._id}/questions`)
-        .set("Authorization", "Bearer valid-tnpc-token")
-        .send({
-          type: "mcq",
-          question: "what is 2 + 2?", // different case — must still be flagged
-          options: ["3", "4", "5", "6"],
-          correctAnswer: "4",
-          targetCompany: "TCS"
-        });
+      expect((await send("What is 2 + 2?")).status).toBe(201);
 
+      const res = await send("what is 2 + 2?"); // different case — must still be flagged
       expect(res.status).toBe(409);
       expect(res.body.conflict).toBeDefined();
-      expect(res.body.conflict.inExam).toBe(false);
+      expect(res.body.conflict.inExam).toBe(true);
       expect(res.body.conflict.question.toLowerCase()).toBe("what is 2 + 2?");
-
-      // No duplicate record was created
-      const dupes = await Question.find({ question: { $regex: /^\s*what is 2 \+ 2\?\s*$/i } });
-      expect(dupes).toHaveLength(1);
     });
 
-    it("13b. Replaces existing bank record when replaceExisting is true", async () => {
-      const original = await Question.create({
-        type: "short_answer",
-        question: "Explain OOP.",
-        correctAnswer: "Objects and classes",
-        createdBy: tnpcAdmin._id
-      });
+    it("13b. replaceExisting updates the embedded snapshot in place (no second entry)", async () => {
+      const send = (correctAnswer, extra = {}) =>
+        request(app)
+          .post(`/api/exams/${draftExam._id}/questions`)
+          .set("Authorization", "Bearer valid-tnpc-token")
+          .send({
+            type: "short_answer",
+            question: "Explain OOP.",
+            correctAnswer,
+            ...extra,
+          });
 
-      const res = await request(app)
-        .post(`/api/exams/${draftExam._id}/questions`)
-        .set("Authorization", "Bearer valid-tnpc-token")
-        .send({
-          type: "short_answer",
-          question: "Explain OOP.",
-          correctAnswer: "Updated answer",
-          points: 3,
-          replaceExisting: true
-        });
+      await send("Objects and classes");
+      const beforeCount = (await Exam.findById(draftExam._id)).questions.length;
 
-      expect(res.status).toBe(201);
+      const res = await send("Updated answer", { points: 3, replaceExisting: true });
+
+      expect(res.status).toBe(200);
       expect(res.body.replaced).toBe(true);
 
-      const after = await Question.findById(original._id);
-      expect(after).not.toBeNull(); // updated in place, not duplicated
-      expect(after.correctAnswer).toBe("Updated answer");
-      expect(after.points).toBe(3);
+      const examDoc = await Exam.findById(draftExam._id);
+      expect(examDoc.questions).toHaveLength(beforeCount); // replaced, not appended
 
-      const total = await Question.countDocuments({ question: "Explain OOP." });
-      expect(total).toBe(1);
+      const snapshot = examDoc.questions.find((q) => q.question === "Explain OOP.");
+      expect(snapshot.correctAnswer).toBe("Updated answer");
+      expect(snapshot.points).toBe(3);
     });
 
-    it("13c. Replacing a question already embedded in this exam refreshes its snapshot in place", async () => {
-      const qbQuestion = await Question.create({
-        type: "short_answer",
-        question: "Embedded Replace Me",
-        correctAnswer: "Old answer",
-        createdBy: tnpcAdmin._id
-      });
-
+    it("13c. Replacing a question embedded in this exam refreshes its snapshot in place", async () => {
       await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
         .set("Authorization", "Bearer valid-tnpc-token")
@@ -342,10 +291,9 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
           type: "short_answer",
           question: "Embedded Replace Me",
           correctAnswer: "Old answer",
-          questionBankId: qbQuestion._id
         });
 
-      const beforeCount = draftExam.questions.length + 1;
+      const beforeCount = (await Exam.findById(draftExam._id)).questions.length;
 
       const res = await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
@@ -363,28 +311,18 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
       const examDoc = await Exam.findById(draftExam._id);
       expect(examDoc.questions).toHaveLength(beforeCount); // snapshot replaced, not appended
 
-      const snapshot = examDoc.questions.find(
-        (q) => q.questionBankId && q.questionBankId.toString() === qbQuestion._id.toString()
-      );
+      const snapshot = examDoc.questions.find((q) => q.question === "Embedded Replace Me");
       expect(snapshot.correctAnswer).toBe("New answer");
     });
 
-    it("14. DELETE /api/exams/:examId/questions/:questionId atomically pulls question without deleting QB item", async () => {
-      const qbQuestion = await Question.create({
-        type: "short_answer",
-        question: "QB Keep Item",
-        correctAnswer: "Answer",
-        createdBy: tnpcAdmin._id
-      });
-
+    it("14. DELETE /api/exams/:examId/questions/:questionId atomically pulls the question", async () => {
       const addRes = await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
         .set("Authorization", "Bearer valid-tnpc-token")
         .send({
           type: "short_answer",
-          question: "QB Keep Item",
-          correctAnswer: "Answer",
-          questionBankId: qbQuestion._id
+          question: "Removable Question",
+          correctAnswer: "Answer"
         });
 
       const questionId = addRes.body.addedQuestion._id;
@@ -395,10 +333,6 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
 
       expect(delRes.status).toBe(200);
       expect(delRes.body.exam.questions.find(q => q._id === questionId)).toBeUndefined();
-
-      // Verify Question Bank item still exists
-      const qbStillExists = await Question.findById(qbQuestion._id);
-      expect(qbStillExists).not.toBeNull();
     });
 
     it("15. PUT /api/exams/:examId/questions/:questionId updates specific question atomically", async () => {
@@ -677,16 +611,7 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
 
   // ── 9. IMAGE QUESTION ROUND-TRIP ───────────────────────────────────────────
   describe("Image Question Handling", () => {
-    it("29. Image question survives QB → exam snapshot → student view", async () => {
-      const qbQuestion = await Question.create({
-        type: "mcq",
-        question: "What is shown in the image?",
-        options: ["Cat", "Dog", "Bird", "Fish"],
-        correctAnswer: "Cat",
-        imageUrl: "https://example.com/test-image.png",
-        createdBy: tnpcAdmin._id,
-      });
-
+    it("29. Image URL survives into the exam snapshot", async () => {
       const addRes = await request(app)
         .post(`/api/exams/${draftExam._id}/questions`)
         .set("Authorization", "Bearer valid-tnpc-token")
@@ -696,13 +621,11 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
           options: ["Cat", "Dog", "Bird", "Fish"],
           correctAnswer: "Cat",
           imageUrl: "https://example.com/test-image.png",
-          questionBankId: qbQuestion._id,
         });
 
       expect(addRes.status).toBe(201);
       const addedQ = addRes.body.addedQuestion;
       expect(addedQ.imageUrl).toBe("https://example.com/test-image.png");
-      expect(addedQ.questionBankId).toBe(qbQuestion._id.toString());
     });
   });
 
@@ -764,42 +687,7 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
     });
   });
 
-  // ── 12. QUESTION BANK RECORD SURVIVAL ──────────────────────────────────────
-  describe("Question Bank Record Survival", () => {
-    it("34. Deleting question from exam preserves Question Bank record", async () => {
-      const qbQuestion = await Question.create({
-        type: "short_answer",
-        question: "QB Survival Test",
-        correctAnswer: "Answer",
-        createdBy: tnpcAdmin._id,
-      });
-
-      // Add to exam
-      const addRes = await request(app)
-        .post(`/api/exams/${draftExam._id}/questions`)
-        .set("Authorization", "Bearer valid-tnpc-token")
-        .send({
-          type: "short_answer",
-          question: "QB Survival Test",
-          correctAnswer: "Answer",
-          questionBankId: qbQuestion._id,
-        });
-
-      const addedQId = addRes.body.addedQuestion._id;
-
-      // Delete from exam
-      await request(app)
-        .delete(`/api/exams/${draftExam._id}/questions/${addedQId}`)
-        .set("Authorization", "Bearer valid-tnpc-token");
-
-      // Verify QB record still exists
-      const qbStill = await Question.findById(qbQuestion._id);
-      expect(qbStill).not.toBeNull();
-      expect(qbStill.question).toBe("QB Survival Test");
-    });
-  });
-
-  // ── 13. UNAUTHENTICATED ACCESS ─────────────────────────────────────────────
+  // ── 12. UNAUTHENTICATED ACCESS ─────────────────────────────────────────────
   describe("Unauthenticated Access", () => {
     it("35. Unauthenticated join request rejected", async () => {
       const res = await request(app)

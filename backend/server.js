@@ -75,7 +75,6 @@ app.use("/api/admin", require("./routes/admin"));
 app.use("/api/staff", require("./routes/staff"));
 app.use("/api/students", require("./routes/students"));
 app.use("/api/grading", require("./routes/grading"));
-app.use("/api/questions", require("./routes/questions"));
 app.use("/api/uploads", require("./routes/uploads"));
 
 // Grading is fully deterministic (no external services) — no queue needed.

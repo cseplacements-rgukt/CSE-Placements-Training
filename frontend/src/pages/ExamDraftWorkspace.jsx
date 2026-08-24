@@ -413,11 +413,8 @@ const QuestionEditor = ({ initial, onSave, onCancel, saving, sections, uploadIma
         {duplicate && (
           <Alert variant="warning" title="Duplicate question detected">
             <p>
-              A question with this exact text already exists{" "}
-              {duplicate.inExam ? "in this exam" : "in the question bank"}
-              {duplicate.createdAt
-                ? ` (added ${new Date(duplicate.createdAt).toLocaleDateString()})`
-                : ""}. Replace it with what you typed, or keep the existing one?
+              A question with this exact text already exists in this exam.
+              Replace it with what you typed, or keep the existing one?
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Button size="sm" onClick={handleReplaceDuplicate} disabled={saving}>
@@ -746,10 +743,16 @@ const ExamDraftWorkspace = () => {
   };
 
   // ── Bulk import from JSON file ─────────────────────────────────────────────
+  // A question whose exact text already exists in THIS exam is skipped
+  // automatically (the manual editor keeps its interactive Replace dialog);
+  // everything else is added. There is no shared question bank — questions
+  // live only inside their exam.
   const handleJsonImport = async (importedQuestions) => {
     setShowJsonImport(false);
     let added = 0;
+    let skipped = 0;
     let failed = 0;
+    const failures = [];
     for (const payload of importedQuestions) {
       try {
         const token = await getAuthToken();
@@ -757,16 +760,23 @@ const ExamDraftWorkspace = () => {
         setExam(res.exam);
         added++;
       } catch (err) {
+        if (err.response?.status === 409 && err.response?.data?.conflict?.inExam) {
+          skipped++;
+          continue;
+        }
         failed++;
+        failures.push(err.response?.data?.message || err.message);
         console.error("Failed to add imported question:", err.response?.data?.message);
       }
     }
-    if (added > 0 && failed === 0) {
-      flashMsg("success", `Added ${added} question${added !== 1 ? "s" : ""} from JSON.`);
-    } else if (added > 0) {
-      flashMsg("error", `Added ${added}, but ${failed} question${failed !== 1 ? "s" : ""} were rejected by the server.`);
-    } else {
+    const parts = [];
+    if (added) parts.push(`added ${added}`);
+    if (skipped) parts.push(`skipped ${skipped} already in this exam`);
+    if (failed) parts.push(`${failed} failed`);
+    if (!added && !skipped && failed) {
       flashMsg("error", "None of the questions could be added — check the server requirements.");
+    } else {
+      flashMsg(failed ? "error" : "success", `Import finished: ${parts.join(", ")}.`);
     }
   };
 
