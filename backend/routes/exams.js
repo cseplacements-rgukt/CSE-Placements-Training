@@ -959,7 +959,104 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
     }
 
     // If no questionBankId, create a Question Bank record first
+    const replaceExisting = req.body.replaceExisting === true;
+    let wasReplaced = false;
     let resolvedQBId = questionBankId || null;
+    if (!resolvedQBId) {
+      // Duplicate detection: same question text (case/whitespace-insensitive)
+      // for the same target company already exists in the bank → flag it and
+      // let the author choose to replace it or keep the existing one.
+      const escaped = String(question).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const duplicateQb = await Question.findOne({
+        question: { $regex: `^\\s*${escaped}\\s*$`, $options: "i" },
+        targetCompany: targetCompany || "General",
+      });
+
+      if (duplicateQb) {
+        const inThisExam = exam.questions.some(
+          (q) => q.questionBankId && q.questionBankId.toString() === duplicateQb._id.toString()
+        );
+
+        if (!replaceExisting) {
+          return res.status(409).json({
+            message: inThisExam
+              ? "A question with this exact text already exists in this exam."
+              : "A question with this exact text already exists in the question bank.",
+            conflict: {
+              questionBankId: duplicateQb._id,
+              question: duplicateQb.question,
+              targetCompany: duplicateQb.targetCompany,
+              createdAt: duplicateQb.createdAt,
+              inExam: inThisExam,
+            },
+          });
+        }
+
+        // Replace: overwrite the existing bank record with the new content
+        await Question.findByIdAndUpdate(duplicateQb._id, {
+          type,
+          question,
+          contentType: contentType === "code" ? "code" : "text",
+          codeSnippet: {
+            code: codeSnippet?.code || "",
+            language: codeSnippet?.language || "plaintext",
+          },
+          options: type === "mcq" ? options.filter(o => o.trim()) : [],
+          correctAnswer,
+          modelAnswer: modelAnswer || "",
+          points: points || 1,
+          explanation: explanation || "",
+          constraints: constraints || { wordLimit: null, difficultyLevel: "medium" },
+          imageUrl: imageUrl || "",
+          category: category || "Aptitude",
+          topic: topic || "",
+          targetCompany: targetCompany || "General",
+          tags: tags || [],
+        });
+
+        // If the replaced question is embedded in this exam, refresh that snapshot too
+        if (inThisExam) {
+          await Exam.updateOne(
+            { _id: exam._id, "questions.questionBankId": duplicateQb._id },
+            {
+              $set: {
+                "questions.$.type": type,
+                "questions.$.question": question,
+                "questions.$.contentType": contentType === "code" ? "code" : "text",
+                "questions.$.codeSnippet": {
+                  code: codeSnippet?.code || "",
+                  language: codeSnippet?.language || "plaintext",
+                },
+                "questions.$.options":
+                  type === "mcq" || type === "true_false" ? (options || []).filter(o => o.trim()) : [],
+                "questions.$.correctAnswer": correctAnswer,
+                "questions.$.modelAnswer": modelAnswer || "",
+                "questions.$.points": points || 1,
+                "questions.$.explanation": explanation || "",
+                "questions.$.imageUrl": imageUrl || "",
+                "questions.$.constraints": constraints || { wordLimit: null, difficultyLevel: "medium" },
+                updatedAt: new Date(),
+              },
+            }
+          );
+          const updated = await Exam.findById(exam._id);
+          return res.status(200).json({
+            exam: updated,
+            replaced: true,
+            addedQuestion: updated.questions.find(
+              (q) => q.questionBankId && q.questionBankId.toString() === duplicateQb._id.toString()
+            ),
+            message: "Existing question replaced successfully.",
+          });
+        }
+
+        // Not yet in this exam: attach a fresh snapshot pointing at the
+        // (now-updated) existing bank record instead of creating another one.
+        resolvedQBId = duplicateQb._id;
+        wasReplaced = true;
+      }
+    }
+
     if (!resolvedQBId) {
       const qbRecord = new Question({
         type,
@@ -1023,7 +1120,9 @@ router.post("/:examId/questions", verifyFirebaseToken, async (req, res) => {
     res.status(201).json({
       exam: updated,
       addedQuestion: updated.questions[updated.questions.length - 1],
-      message: "Question added to exam successfully",
+      ...(wasReplaced
+        ? { replaced: true, message: "Existing question replaced and added to exam." }
+        : { message: "Question added to exam successfully" }),
     });
   } catch (error) {
     console.error("Error adding question to exam:", error);

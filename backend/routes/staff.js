@@ -5,9 +5,11 @@ const Exam = require("../models/Exam");
 const Submission = require("../models/Submission");
 const ProctoringSession = require("../models/ProctoringSession");
 const Notification = require("../models/Notification");
+const firebaseAdmin = require("../config/firebase");
 const verifyFirebaseToken = require("../middleware/auth");
 const {
   provisionStaffAccount,
+  validateStaffPassword,
   ProvisionError,
 } = require("../services/staffProvisioning");
 
@@ -88,7 +90,7 @@ router.get("/users", verifyFirebaseToken, requireStaffManager, async (req, res) 
 // ─── Create a staff account (provisioned, not self-serve) ────────────
 router.post("/", verifyFirebaseToken, requireStaffManager, async (req, res) => {
   try {
-    const { name, email, role } = req.body;
+    const { name, email, role, password } = req.body;
 
     // Role hierarchy: admins create coordinators only; super_admins also
     // create admins. Enforced here before the shared provisioning service.
@@ -99,17 +101,22 @@ router.post("/", verifyFirebaseToken, requireStaffManager, async (req, res) => {
       });
     }
 
+    // The creating admin picks the starting password; it is only generated
+    // randomly when none is supplied (e.g. seed scripts).
+    const chosenPassword = password ? validateStaffPassword(password) : undefined;
+
     const { user, tempPassword } = await provisionStaffAccount({
       name,
       email,
       role,
       actorName: req.managerUser.name,
+      password: chosenPassword,
     });
 
     res.status(201).json({
       user,
       tempPassword,
-      message: `${role} account created. Share the temporary password securely — it is shown only once.`,
+      message: `${role} account created. Share the password securely so they can sign in — they can change it after logging in.`,
     });
   } catch (error) {
     if (error instanceof ProvisionError || error.status) {
@@ -119,6 +126,60 @@ router.post("/", verifyFirebaseToken, requireStaffManager, async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
+
+// ─── Reset a staff member's password (admin action) ──────────────────
+router.put(
+  "/:id/password",
+  verifyFirebaseToken,
+  requireStaffManager,
+  async (req, res) => {
+    try {
+      const target = await loadTarget(req, res);
+      if (!target) return;
+
+      let newPassword;
+      try {
+        newPassword = validateStaffPassword(req.body.password);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+
+      if (target._id.toString() === req.managerUser._id.toString()) {
+        return res.status(400).json({
+          message:
+            "Use 'Change Password' from the Account menu to update your own password",
+        });
+      }
+
+      try {
+        await firebaseAdmin
+          .auth()
+          .updateUser(target.firebaseUid, { password: newPassword });
+      } catch (fbError) {
+        console.error("Firebase password reset failed:", fbError);
+        return res.status(502).json({
+          message:
+            "Could not reset the password in Firebase. Verify Firebase Admin credentials and try again.",
+        });
+      }
+
+      await Notification.create({
+        userId: target._id,
+        type: "account_update",
+        title: "Password Reset",
+        message: `Your password was reset by ${req.managerUser.name}. Sign in with the new password you were given and change it after logging in.`,
+        priority: "high",
+      });
+
+      res.json({
+        message: `Password reset for ${target.name}. Share it securely — they can change it after signing in.`,
+      });
+    } catch (error) {
+      console.error("Error resetting staff password:", error);
+      res.status(500).json({ message: "Server error", error: error.message });
+    }
+  },
+);
 
 // ─── Rename / activate / deactivate a staff account ──────────────────
 router.put("/:id", verifyFirebaseToken, requireStaffManager, async (req, res) => {

@@ -60,8 +60,12 @@ const QuestionEditor = ({ initial, onSave, onCancel, saving, sections, uploadIma
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(initial?.imageUrl || "");
   const [error, setError] = useState("");
+  const [duplicate, setDuplicate] = useState(null);
 
-  const update = (field, value) => setQ((prev) => ({ ...prev, [field]: value }));
+  const update = (field, value) => {
+    if (field === "question") setDuplicate(null);
+    setQ((prev) => ({ ...prev, [field]: value }));
+  };
 
   const changeType = (type) => {
     setQ((prev) => {
@@ -100,11 +104,11 @@ const QuestionEditor = ({ initial, onSave, onCancel, saving, sections, uploadIma
     return null;
   };
 
-  const handleSave = async () => {
+  const submit = async (extra = {}) => {
     const err = validate();
     if (err) {
       setError(err);
-      return;
+      return false;
     }
     setError("");
     try {
@@ -117,11 +121,23 @@ const QuestionEditor = ({ initial, onSave, onCancel, saving, sections, uploadIma
         imageUrl: finalImageUrl,
         options: isOptionType ? q.options.filter((o) => o.trim()) : [],
         codeSnippet: q.contentType === "code" ? q.codeSnippet : { code: "", language: "plaintext" },
+        ...extra,
       });
+      setDuplicate(null);
+      return true;
     } catch (e) {
+      if (e.response?.status === 409 && e.response?.data?.conflict) {
+        setError("");
+        setDuplicate(e.response.data.conflict);
+        return false;
+      }
       setError(e.response?.data?.message || e.message || "Failed to save question.");
+      return false;
     }
   };
+
+  const handleSave = () => submit();
+  const handleReplaceDuplicate = () => submit({ replaceExisting: true });
 
   const handleImageSelect = async (e) => {
     const file = e.target.files[0];
@@ -393,6 +409,26 @@ const QuestionEditor = ({ initial, onSave, onCancel, saving, sections, uploadIma
             </div>
           )}
         </div>
+
+        {duplicate && (
+          <Alert variant="warning" title="Duplicate question detected">
+            <p>
+              A question with this exact text already exists{" "}
+              {duplicate.inExam ? "in this exam" : "in the question bank"}
+              {duplicate.createdAt
+                ? ` (added ${new Date(duplicate.createdAt).toLocaleDateString()})`
+                : ""}. Replace it with what you typed, or keep the existing one?
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" onClick={handleReplaceDuplicate} disabled={saving}>
+                {saving ? "Replacing…" : "Replace Existing Question"}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setDuplicate(null)}>
+                Keep Existing (Don't Add)
+              </Button>
+            </div>
+          </Alert>
+        )}
 
         <div className="pt-1">
           <Button onClick={handleSave} disabled={saving}>
@@ -678,7 +714,7 @@ const ExamDraftWorkspace = () => {
       const res = await examService.addExamQuestion(token, examId, payload);
       setExam(res.exam);
       setShowAddForm(false);
-      flashMsg("success", "Question added.");
+      flashMsg("success", res.replaced ? "Existing question replaced." : "Question added.");
     } finally {
       setSavingQuestion(false);
     }

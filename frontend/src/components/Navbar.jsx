@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "../config/firebase";
 import { useAuth } from "../contexts/AuthContext";
+import { examService } from "../services/examService";
 
 /* ── SVG Icons ───────────────────────────────────────────────── */
 const HomeIcon = () => (
@@ -32,6 +35,12 @@ const ShieldIcon = () => (
 const LogoutIcon = () => (
   <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+  </svg>
+);
+
+const KeyIcon = () => (
+  <svg className="h-[18px] w-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
   </svg>
 );
 
@@ -78,16 +87,76 @@ const BrandMark = ({ size = "md" }) => (
 );
 
 const Navbar = () => {
-  const { userProfile, logout } = useAuth();
+  const { userProfile, logout, getAuthToken } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Change-password modal state
+  const [showPwModal, setShowPwModal] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [pwSuccess, setPwSuccess] = useState("");
 
   const isActive = (path) => location.pathname === path;
 
   const handleLogout = async () => {
     await logout();
     navigate("/login");
+  };
+
+  const openPwModal = () => {
+    setPwForm({ current: "", next: "", confirm: "" });
+    setPwError("");
+    setPwSuccess("");
+    setMobileOpen(false);
+    setShowPwModal(true);
+  };
+
+  const submitPasswordChange = async (e) => {
+    e.preventDefault();
+    if (pwForm.next.length < 6 || pwForm.next.length > 64) {
+      setPwError("New password must be 6–64 characters.");
+      return;
+    }
+    if (pwForm.next !== pwForm.confirm) {
+      setPwError("New passwords do not match.");
+      return;
+    }
+    if (!pwForm.current) {
+      setPwError("Enter your current password.");
+      return;
+    }
+    setPwBusy(true);
+    setPwError("");
+    try {
+      const isStudent = userProfile?.role === "student";
+      if (!isStudent && !auth.currentUser?.email) {
+        throw new Error("Not signed in.");
+      }
+      // Staff: re-authenticating with the current password both verifies it
+      // and satisfies Firebase's recent-login requirement.
+      if (!isStudent) {
+        await signInWithEmailAndPassword(auth, auth.currentUser.email, pwForm.current);
+      }
+      const t = await getAuthToken();
+      await examService.changePassword(t, {
+        currentPassword: pwForm.current,
+        newPassword: pwForm.next,
+      });
+      setPwSuccess("Password changed successfully.");
+      setPwForm({ current: "", next: "", confirm: "" });
+      setTimeout(() => setShowPwModal(false), 1500);
+    } catch (err) {
+      if (err.code === "auth/wrong-password" || err.code === "auth/invalid-credential") {
+        setPwError("Current password is incorrect.");
+      } else {
+        setPwError(err.response?.data?.message || err.message || "Failed to change password.");
+      }
+    } finally {
+      setPwBusy(false);
+    }
   };
 
   const close = () => setMobileOpen(false);
@@ -195,6 +264,13 @@ const Navbar = () => {
           </span>
           <button
             type="button"
+            onClick={openPwModal}
+            className={`${NAV_LINK_BASE} ${NAV_LINK_IDLE} w-full`}
+          >
+            <KeyIcon /> Change Password
+          </button>
+          <button
+            type="button"
             onClick={handleLogout}
             className={`${NAV_LINK_BASE} ${NAV_LINK_IDLE} w-full`}
           >
@@ -219,6 +295,82 @@ const Navbar = () => {
           </div>
         </div>
       </aside>
+
+      {/* ── Change Password modal ─────────────────────── */}
+      {showPwModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/50 p-4" role="dialog" aria-modal="true" aria-label="Change password">
+          <div className="w-full max-w-sm rounded-md border border-line bg-surface p-5 shadow-lg">
+            <h2 className="text-[16px] font-semibold text-ink">Change Password</h2>
+            <p className="mt-1 text-xs text-ink-muted">
+              {userProfile?.role === "student"
+                ? "Update the exam-cell password for your account."
+                : "Verify your current password, then choose a new one."}
+            </p>
+
+            {pwError && (
+              <p className="mt-3 rounded-sm border-l-[3px] border-danger bg-red-50 px-3 py-2 text-sm text-red-800">{pwError}</p>
+            )}
+            {pwSuccess && (
+              <p className="mt-3 rounded-sm border-l-[3px] border-success bg-green-50 px-3 py-2 text-sm text-green-800">{pwSuccess}</p>
+            )}
+
+            <form onSubmit={submitPasswordChange} className="mt-4 space-y-3">
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-ink">Current password</span>
+                <input
+                  type="password"
+                  value={pwForm.current}
+                  onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })}
+                  required
+                  autoComplete="current-password"
+                  className="h-9 w-full rounded-sm border border-line bg-surface px-3 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-ink">New password</span>
+                <input
+                  type="password"
+                  value={pwForm.next}
+                  onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })}
+                  required
+                  minLength={6}
+                  maxLength={64}
+                  autoComplete="new-password"
+                  className="h-9 w-full rounded-sm border border-line bg-surface px-3 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-ink">Confirm new password</span>
+                <input
+                  type="password"
+                  value={pwForm.confirm}
+                  onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })}
+                  required
+                  autoComplete="new-password"
+                  className="h-9 w-full rounded-sm border border-line bg-surface px-3 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25"
+                />
+              </label>
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={pwBusy || !!pwSuccess}
+                  className="flex h-9 items-center rounded-sm bg-primary px-4 text-sm font-medium text-white transition-colors hover:bg-primary-dark disabled:opacity-60"
+                >
+                  {pwBusy ? "Saving…" : pwSuccess ? "Done" : "Save Password"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPwModal(false)}
+                  disabled={pwBusy}
+                  className="flex h-9 items-center rounded-sm border border-line px-4 text-sm font-medium text-ink-muted transition-colors hover:bg-primary-light hover:text-ink disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

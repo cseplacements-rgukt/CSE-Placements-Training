@@ -19,6 +19,25 @@ const generateTempPassword = () => {
   return out;
 };
 
+// Firebase Auth enforces a minimum of 6 characters; cap at a sane maximum.
+const PASSWORD_MIN = 6;
+const PASSWORD_MAX = 64;
+
+/**
+ * Validates an admin-chosen staff password and returns it trimmed.
+ * @returns {string}
+ */
+function validateStaffPassword(password) {
+  const value = typeof password === "string" ? password.trim() : "";
+  if (value.length < PASSWORD_MIN || value.length > PASSWORD_MAX) {
+    throw new ProvisionError(
+      400,
+      `Password must be ${PASSWORD_MIN}–${PASSWORD_MAX} characters`,
+    );
+  }
+  return value;
+}
+
 class ProvisionError extends Error {
   constructor(status, message) {
     super(message);
@@ -59,10 +78,7 @@ async function provisionStaffAccount({ name, email, role, actorName, password })
   let tempPassword;
   let firebaseUid;
   try {
-    tempPassword =
-      typeof password === "string" && password.trim()
-        ? password.trim()
-        : generateTempPassword();
+    tempPassword = password ? validateStaffPassword(password) : generateTempPassword();
     const fbUser = await firebaseAdmin.auth().createUser({
       email: trimmedEmail,
       password: tempPassword,
@@ -109,5 +125,6 @@ async function provisionStaffAccount({ name, email, role, actorName, password })
 module.exports = {
   provisionStaffAccount,
   generateTempPassword,
+  validateStaffPassword,
   ProvisionError,
 };

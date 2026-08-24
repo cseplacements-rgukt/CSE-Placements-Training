@@ -8,6 +8,7 @@ const LoginAttempt = require("../models/LoginAttempt");
 const Notification = require("../models/Notification");
 const verifyFirebaseToken = require("../middleware/auth");
 const { signStudentToken } = require("../middleware/auth");
+const admin = require("../config/firebase");
 const { authLimiter, preAuthLimiter } = require("../middleware/rateLimiter");
 
 const MAX_REGISTRATION_ATTEMPTS = 3;
@@ -225,6 +226,92 @@ router.put("/profile", verifyFirebaseToken, async (req, res) => {
     res.json({ user, message: "Profile updated" });
   } catch (error) {
     console.error("Error updating profile:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+// ─── Change own password (self-service, logged-in user) ─────────────
+// Staff: the client re-authenticates against Firebase BEFORE calling this
+// (that check is the current-password verification). Roster students:
+// verified here against their bcrypt passwordHash.
+router.put("/change-password", authLimiter, verifyFirebaseToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || String(newPassword).trim().length < 6) {
+      return res
+        .status(400)
+        .json({ message: "New password must be at least 6 characters" });
+    }
+    if (String(newPassword).trim().length > 64) {
+      return res
+        .status(400)
+        .json({ message: "New password must be at most 64 characters" });
+    }
+
+    // ── Roster student path (backend JWT) ────────────────────────────
+    if (req.user.authType === "student-roster") {
+      if (!currentPassword) {
+        return res
+          .status(400)
+          .json({ message: "Current password is required" });
+      }
+
+      const user = await User.findById(req.user.studentId).select(
+        "+passwordHash",
+      );
+      if (!user || !user.passwordHash) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!matches) {
+        return res
+          .status(401)
+          .json({ message: "Current password is incorrect" });
+      }
+
+      const { hashRosterPassword } = require("../services/studentRoster");
+      user.passwordHash = await hashRosterPassword(newPassword);
+      await user.save();
+
+      await Notification.create({
+        userId: user._id,
+        type: "account_update",
+        title: "Password Changed",
+        message: "Your password was changed successfully. If this wasn't you, contact an administrator immediately.",
+        priority: "high",
+      });
+
+      return res.json({ message: "Password changed successfully" });
+    }
+
+    // ── Staff path (Firebase Auth) ───────────────────────────────────
+    const trimmed = String(newPassword).trim();
+    try {
+      await admin.auth().updateUser(req.user.uid, { password: trimmed });
+    } catch (fbError) {
+      console.error("Firebase password change failed:", fbError);
+      return res.status(502).json({
+        message:
+          "Could not update the password in Firebase. Please try again.",
+      });
+    }
+
+    const dbUser = await User.findOne({ firebaseUid: req.user.uid });
+    if (dbUser) {
+      await Notification.create({
+        userId: dbUser._id,
+        type: "account_update",
+        title: "Password Changed",
+        message: "Your password was changed successfully. If this wasn't you, contact an administrator immediately.",
+        priority: "high",
+      });
+    }
+
+    res.json({ message: "Password changed successfully" });
+  } catch (error) {
+    console.error("Error changing password:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });

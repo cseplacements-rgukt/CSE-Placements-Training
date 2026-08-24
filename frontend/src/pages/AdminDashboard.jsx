@@ -41,6 +41,7 @@ const StaffRow = React.memo(function StaffRow({
   isSuperAdmin,
   onChangeRole,
   onToggleStatus,
+  onResetPassword,
   onDelete,
 }) {
   const canChangeTier =
@@ -78,6 +79,11 @@ const StaffRow = React.memo(function StaffRow({
           <Button size="sm" variant="secondary" onClick={() => onToggleStatus(member)}>
             {member.isActive ? "Disable" : "Enable"}
           </Button>
+          {!isSelf && (
+            <Button size="sm" variant="secondary" onClick={() => onResetPassword(member)} title="Set a new password for this account">
+              Reset PW
+            </Button>
+          )}
           {isSuperAdmin ? (
             <Button size="sm" variant="dangerGhost" onClick={() => onDelete(member)}>
               Remove
@@ -139,10 +145,12 @@ const AdminDashboard = () => {
   // ── Staff state ───────────────────────────────────────────────────────
   const [staff, setStaff] = useState([]);
   const [staffSearch, setStaffSearch] = useState("");
-  const [newStaff, setNewStaff] = useState({ name: "", email: "", role: "coordinator" });
+  const [newStaff, setNewStaff] = useState({ name: "", email: "", role: "coordinator", password: "" });
   const [staffBusy, setStaffBusy] = useState(false);
   const [staffMessage, setStaffMessage] = useState(null);
   const [createdTempPassword, setCreatedTempPassword] = useState(null);
+  const [resetStaff, setResetStaff] = useState(null);
+  const [resetForm, setResetForm] = useState({ password: "", confirm: "" });
 
   // ── Roster state ──────────────────────────────────────────────────────
   const [students, setStudents] = useState([]);
@@ -231,7 +239,7 @@ const AdminDashboard = () => {
       const authToken = await token();
       const data = await adminService.createStaff(authToken, newStaff);
       setCreatedTempPassword({ email: newStaff.email, password: data.tempPassword });
-      setNewStaff({ name: "", email: "", role: "coordinator" });
+      setNewStaff({ name: "", email: "", role: "coordinator", password: "" });
       showStaffMessage("success", data.message);
       fetchStaff();
     } catch (err) {
@@ -241,8 +249,37 @@ const AdminDashboard = () => {
     }
   };
 
-  const handleToggleStaffStatus = async (member) => {
+  const openResetPassword = (member) => {
+    setResetStaff(member);
+    setResetForm({ password: "", confirm: "" });
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    if (!resetStaff) return;
+    if (resetForm.password.length < 6 || resetForm.password.length > 64) {
+      showStaffMessage("error", "Password must be 6–64 characters");
+      return;
+    }
+    if (resetForm.password !== resetForm.confirm) {
+      showStaffMessage("error", "Passwords do not match");
+      return;
+    }
     try {
+      setStaffBusy(true);
+      const authToken = await token();
+      const data = await adminService.resetStaffPassword(authToken, resetStaff._id, resetForm.password);
+      showStaffMessage("success", data.message);
+      setResetStaff(null);
+      setResetForm({ password: "", confirm: "" });
+    } catch (err) {
+      showStaffMessage("error", err.response?.data?.message || "Failed to reset password");
+    } finally {
+      setStaffBusy(false);
+    }
+  };
+
+  const handleToggleStaffStatus = async (member) => {    try {
       const authToken = await token();
       await adminService.updateStaff(authToken, member._id, {
         isActive: !member.isActive,
@@ -670,13 +707,13 @@ const AdminDashboard = () => {
             {createdTempPassword && (
               <Alert variant="success" title={`Account created for ${createdTempPassword.email}`} className="mb-4" onDismiss={() => setCreatedTempPassword(null)}>
                 <p className="mt-0.5">
-                  Temporary password:{" "}
+                  Password:{" "}
                   <code className="rounded-sm bg-white px-1.5 py-0.5 font-mono text-[13px] font-semibold text-ink ring-1 ring-inset ring-line">
                     {createdTempPassword.password}
                   </code>
                 </p>
                 <small className="mt-1 block opacity-80">
-                  Shown only once — hand it to the staff member securely. They should change it after first sign-in.
+                  Share it securely — they can change it themselves after signing in via Account → Change Password.
                 </small>
               </Alert>
             )}
@@ -684,6 +721,18 @@ const AdminDashboard = () => {
             <form onSubmit={handleCreateStaff} className="mt-4 flex flex-col gap-2.5 rounded-md border border-line bg-surface p-4 shadow-sm lg:flex-row lg:items-end">
               <Input label="Full name" type="text" value={newStaff.name} onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })} required />
               <Input label="Email" type="email" value={newStaff.email} onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })} required />
+              <Input
+                label="Password"
+                placeholder="Their starting password"
+                type="text"
+                minLength={6}
+                maxLength={64}
+                autoComplete="off"
+                title="6–64 characters. They can change it after signing in."
+                value={newStaff.password}
+                onChange={(e) => setNewStaff({ ...newStaff, password: e.target.value })}
+                required
+              />
               <Select label="Tier" value={newStaff.role} onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}>
                 <option value="coordinator">Coordinator</option>
                 {isSuperAdmin && <option value="admin">Admin</option>}
@@ -694,6 +743,46 @@ const AdminDashboard = () => {
                 </Button>
               </div>
             </form>
+
+            {resetStaff && (
+              <form onSubmit={handleResetPassword} className="mt-4 rounded-md border border-accent/40 bg-surface p-4 shadow-sm">
+                <p className="text-sm font-semibold text-ink">
+                  Reset password for <span className="text-ink">{resetStaff.name}</span>{" "}
+                  <span className="font-normal text-ink-muted">({resetStaff.email})</span>
+                </p>
+                <div className="mt-3 flex flex-col gap-2.5 lg:flex-row lg:items-end">
+                  <Input
+                    label="New password"
+                    type="text"
+                    minLength={6}
+                    maxLength={64}
+                    autoComplete="off"
+                    value={resetForm.password}
+                    onChange={(e) => setResetForm({ ...resetForm, password: e.target.value })}
+                    required
+                  />
+                  <Input
+                    label="Confirm new password"
+                    type="text"
+                    autoComplete="off"
+                    value={resetForm.confirm}
+                    onChange={(e) => setResetForm({ ...resetForm, confirm: e.target.value })}
+                    required
+                  />
+                  <div className="flex gap-2 lg:pb-0.5">
+                    <Button type="submit" disabled={staffBusy}>
+                      {staffBusy ? "Saving…" : "Save Password"}
+                    </Button>
+                    <Button type="button" variant="secondary" onClick={() => setResetStaff(null)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+                <small className="mt-2 block text-xs text-ink-muted">
+                  They stay signed in on other devices until their session expires. Share the new password securely — they can change it after signing in.
+                </small>
+              </form>
+            )}
 
             <div className="mt-4 flex items-center gap-2.5">
               <input
@@ -728,6 +817,7 @@ const AdminDashboard = () => {
                       isSuperAdmin={isSuperAdmin}
                       onChangeRole={handleChangeStaffRole}
                       onToggleStatus={handleToggleStaffStatus}
+                      onResetPassword={openResetPassword}
                       onDelete={handleDeleteStaff}
                     />
                   ))}

@@ -21,10 +21,10 @@ export const adminService = {
     return response.data;
   },
 
-  createStaff: async (token, { name, email, role }) => {
+  createStaff: async (token, { name, email, role, password }) => {
     const response = await axios.post(
       `${API_URL}/staff`,
-      { name, email, role },
+      { name, email, role, password },
       authHeader(token),
     );
     return response.data;
@@ -56,6 +56,15 @@ export const adminService = {
     return response.data;
   },
 
+  resetStaffPassword: async (token, userId, password) => {
+    const response = await axios.put(
+      `${API_URL}/staff/${userId}/password`,
+      { password },
+      authHeader(token),
+    );
+    return response.data;
+  },
+
   // ─── Student roster ───────────────────────────────────────────────────
   listStudents: async (token, { batchYear = "", search = "", page = 1, limit = 50 } = {}) => {
     const params = new URLSearchParams({ page, limit });
@@ -76,10 +85,10 @@ export const adminService = {
     return response.data;
   },
 
-  addStudent: async (token, { idNumber, name, batchYear }) => {
+  addStudent: async (token, { idNumber, name, batchYear, password }) => {
     const response = await axios.post(
       `${API_URL}/students`,
-      { idNumber, name, batchYear },
+      { idNumber, name, batchYear, password },
       authHeader(token),
     );
     return response.data;

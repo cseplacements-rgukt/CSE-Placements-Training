@@ -6,11 +6,13 @@ const bcrypt = require("bcryptjs");
 const mockVerifyIdToken = jest.fn();
 const mockCreateUser = jest.fn();
 const mockDeleteUser = jest.fn();
+const mockUpdateUser = jest.fn();
 jest.mock("../config/firebase", () => ({
   auth: () => ({
     verifyIdToken: mockVerifyIdToken,
     createUser: mockCreateUser,
     deleteUser: mockDeleteUser,
+    updateUser: mockUpdateUser,
   }),
 }));
 
@@ -506,6 +508,100 @@ describe("Student roster & staff provisioning", () => {
         .set("Authorization", `Bearer ${staffTokenFor("admin_uid")}`)
         .send({ name: "Coord Two", email: "coordtwo@test.com", role: "coordinator" });
       expect(res.status).toBe(201);
+    });
+
+    test("admin-chosen password is honored instead of a random one", async () => {
+      mockCreateUser.mockResolvedValue({ uid: "fb_pw_choice" });
+      await authAs(superAdmin);
+
+      const res = await request(app)
+        .post("/api/staff")
+        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
+        .send({
+          name: "Chosen PW Coord",
+          email: "chosenpw@test.com",
+          role: "coordinator",
+          password: "simplepass1",
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.tempPassword).toBe("simplepass1");
+      expect(mockCreateUser).toHaveBeenCalledWith(
+        expect.objectContaining({ password: "simplepass1" }),
+      );
+    });
+
+    test("rejects passwords shorter than 6 characters without provisioning", async () => {
+      mockCreateUser.mockClear();
+      await authAs(superAdmin);
+
+      const res = await request(app)
+        .post("/api/staff")
+        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
+        .send({
+          name: "Weak PW",
+          email: "weakpw@test.com",
+          role: "coordinator",
+          password: "abc",
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/6–64/);
+      expect(mockCreateUser).not.toHaveBeenCalled();
+    });
+
+    test("admin can reset a coordinator's password via Firebase Admin", async () => {
+      const coord = await User.create({
+        firebaseUid: "fb_reset_me",
+        email: "resetme@test.com",
+        name: "Reset Me",
+        role: "coordinator",
+      });
+      mockUpdateUser.mockResolvedValue({});
+      await authAs(superAdmin);
+
+      const res = await request(app)
+        .put(`/api/staff/${coord._id}/password`)
+        .set("Authorization", `Bearer ${staffTokenFor("sa_uid")}`)
+        .send({ password: "brandnewpw" });
+
+      expect(res.status).toBe(200);
+      expect(mockUpdateUser).toHaveBeenCalledWith("fb_reset_me", {
+        password: "brandnewpw",
+      });
+    });
+
+    test("password reset rejects short passwords and out-of-tier targets", async () => {
+      const coord = await User.create({
+        firebaseUid: "fb_reset_short",
+        email: "resetshort@test.com",
+        name: "Reset Short",
+        role: "coordinator",
+      });
+      const adminTarget = await User.create({
+        firebaseUid: "fb_reset_admin",
+        email: "resetadmin@test.com",
+        name: "Reset Admin Target",
+        role: "admin",
+      });
+      mockUpdateUser.mockClear();
+      await authAs(plainAdmin);
+
+      // Too short → 400, no Firebase call
+      const short = await request(app)
+        .put(`/api/staff/${coord._id}/password`)
+        .set("Authorization", `Bearer ${staffTokenFor("admin_uid")}`)
+        .send({ password: "12345" });
+      expect(short.status).toBe(400);
+      expect(mockUpdateUser).not.toHaveBeenCalled();
+
+      // Admin cannot reset another admin — super_admin exclusive
+      const forbidden = await request(app)
+        .put(`/api/staff/${adminTarget._id}/password`)
+        .set("Authorization", `Bearer ${staffTokenFor("admin_uid")}`)
+        .send({ password: "validpw123" });
+      expect(forbidden.status).toBe(403);
+      expect(mockUpdateUser).not.toHaveBeenCalled();
     });
 
     test("admin sees only coordinators in the staff list", async () => {

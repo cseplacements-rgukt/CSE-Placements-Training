@@ -265,6 +265,110 @@ describe("Phase 8: Exam Code Access, Collaborative Builder & Classroom Removal",
       expect(res.body.message).toContain("already in the exam");
     });
 
+    it("13a. Flags duplicate question text and does not create a second bank record", async () => {
+      await Question.create({
+        type: "mcq",
+        question: "What is 2 + 2?",
+        options: ["3", "4", "5", "6"],
+        correctAnswer: "4",
+        targetCompany: "TCS",
+        createdBy: tnpcAdmin._id
+      });
+
+      const res = await request(app)
+        .post(`/api/exams/${draftExam._id}/questions`)
+        .set("Authorization", "Bearer valid-tnpc-token")
+        .send({
+          type: "mcq",
+          question: "what is 2 + 2?", // different case — must still be flagged
+          options: ["3", "4", "5", "6"],
+          correctAnswer: "4",
+          targetCompany: "TCS"
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.conflict).toBeDefined();
+      expect(res.body.conflict.inExam).toBe(false);
+      expect(res.body.conflict.question.toLowerCase()).toBe("what is 2 + 2?");
+
+      // No duplicate record was created
+      const dupes = await Question.find({ question: { $regex: /^\s*what is 2 \+ 2\?\s*$/i } });
+      expect(dupes).toHaveLength(1);
+    });
+
+    it("13b. Replaces existing bank record when replaceExisting is true", async () => {
+      const original = await Question.create({
+        type: "short_answer",
+        question: "Explain OOP.",
+        correctAnswer: "Objects and classes",
+        createdBy: tnpcAdmin._id
+      });
+
+      const res = await request(app)
+        .post(`/api/exams/${draftExam._id}/questions`)
+        .set("Authorization", "Bearer valid-tnpc-token")
+        .send({
+          type: "short_answer",
+          question: "Explain OOP.",
+          correctAnswer: "Updated answer",
+          points: 3,
+          replaceExisting: true
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.replaced).toBe(true);
+
+      const after = await Question.findById(original._id);
+      expect(after).not.toBeNull(); // updated in place, not duplicated
+      expect(after.correctAnswer).toBe("Updated answer");
+      expect(after.points).toBe(3);
+
+      const total = await Question.countDocuments({ question: "Explain OOP." });
+      expect(total).toBe(1);
+    });
+
+    it("13c. Replacing a question already embedded in this exam refreshes its snapshot in place", async () => {
+      const qbQuestion = await Question.create({
+        type: "short_answer",
+        question: "Embedded Replace Me",
+        correctAnswer: "Old answer",
+        createdBy: tnpcAdmin._id
+      });
+
+      await request(app)
+        .post(`/api/exams/${draftExam._id}/questions`)
+        .set("Authorization", "Bearer valid-tnpc-token")
+        .send({
+          type: "short_answer",
+          question: "Embedded Replace Me",
+          correctAnswer: "Old answer",
+          questionBankId: qbQuestion._id
+        });
+
+      const beforeCount = draftExam.questions.length + 1;
+
+      const res = await request(app)
+        .post(`/api/exams/${draftExam._id}/questions`)
+        .set("Authorization", "Bearer valid-tnpc-token")
+        .send({
+          type: "short_answer",
+          question: "Embedded Replace Me",
+          correctAnswer: "New answer",
+          replaceExisting: true
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.replaced).toBe(true);
+
+      const examDoc = await Exam.findById(draftExam._id);
+      expect(examDoc.questions).toHaveLength(beforeCount); // snapshot replaced, not appended
+
+      const snapshot = examDoc.questions.find(
+        (q) => q.questionBankId && q.questionBankId.toString() === qbQuestion._id.toString()
+      );
+      expect(snapshot.correctAnswer).toBe("New answer");
+    });
+
     it("14. DELETE /api/exams/:examId/questions/:questionId atomically pulls question without deleting QB item", async () => {
       const qbQuestion = await Question.create({
         type: "short_answer",

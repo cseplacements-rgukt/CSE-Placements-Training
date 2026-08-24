@@ -123,6 +123,12 @@ export const examService = {
     return response.data;
   },
 
+  // ─── Self-service password change (staff + roster students) ────────────────
+  changePassword: async (token, { currentPassword, newPassword }) => {
+    const response = await api.put("/auth/change-password", { currentPassword, newPassword }, authHeader(token));
+    return response.data;
+  },
+
   // ─── Submission operations ─────────────────────────────────────────────────
   startExam: async (token, examId, examCode) => {
     const response = await api.post("/submissions/start", { examId, examCode }, authHeader(token));
