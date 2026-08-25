@@ -606,7 +606,7 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
     })
       .populate(
         "examId",
-        "title description duration scheduledAt endTime settings questions",
+        "title description duration scheduledAt endTime settings questions sections",
       )
       .sort({ submittedAt: -1 })
       .lean();
@@ -620,6 +620,15 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
           percentage: isNaN(s.percentage) ? 0 : s.percentage,
           score: isNaN(s.score) ? 0 : s.score,
         };
+
+        // Sections are organizational metadata — students only need id+name
+        // so the results view can group questions section-wise.
+        if (Array.isArray(cleaned.examId?.sections)) {
+          cleaned.examId.sections = cleaned.examId.sections.map((sec) => ({
+            _id: sec._id,
+            name: sec.name,
+          }));
+        }
 
         // Results are hidden until the exam window closes (+5 min buffer).
         gateResultsForStudent(cleaned, s.examId);

@@ -12,6 +12,7 @@ import Skeleton from "../components/ui/Skeleton";
 import Modal from "../components/ui/Modal";
 import Pagination from "../components/ui/Pagination";
 import usePagedData from "../hooks/usePagedData";
+import { buildSectionGroups, sectionNamesById } from "../lib/examSections";
 
 const PAGE_SIZE = 12;
 
@@ -268,86 +269,123 @@ const MySubmissions = () => {
                 </Alert>
               )}
 
-            <div className="space-y-4">
-              {(selectedSubmission.examId?.questions || []).map((question, index) => {
-                const answer = selectedSubmission.answers?.find(
-                  (a) => String(a.questionId) === String(question._id)
+            <div className="space-y-6">
+              {(() => {
+                const questions = selectedSubmission.examId?.questions || [];
+                const groups = buildSectionGroups(
+                  questions,
+                  selectedSubmission.examId?.sections
+                );
+                const nameById = sectionNamesById(
+                  selectedSubmission.examId?.sections
                 );
                 const showCorrect = canShowCorrectAnswer(selectedSubmission);
-                const isCorrect = answer?.isCorrect || (answer?.marksAwarded > 0);
-                const awarded = answer?.marksAwarded || 0;
 
-                return (
-                  <div
-                    key={question._id || index}
-                    className={`rounded-md border p-4 ${
-                      showCorrect
-                        ? isCorrect
-                          ? "border-green-200 bg-green-50/40"
-                          : "border-red-200 bg-red-50/30"
-                        : "border-line"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-primary-light text-xs font-semibold text-ink">
-                          {index + 1}
-                        </span>
-                        <span className="truncate text-xs uppercase tracking-wide text-ink-muted">
-                          {question.type?.replace(/_/g, " ")}
+                const renderQuestionCard = (question, index) => {
+                  const answer = selectedSubmission.answers?.find(
+                    (a) => String(a.questionId) === String(question._id)
+                  );
+                  const isCorrect = answer?.isCorrect || (answer?.marksAwarded > 0);
+                  const awarded = answer?.marksAwarded || 0;
+
+                  return (
+                    <div
+                      key={question._id || index}
+                      className={`rounded-md border p-4 ${
+                        showCorrect
+                          ? isCorrect
+                            ? "border-green-200 bg-green-50/40"
+                            : "border-red-200 bg-red-50/30"
+                          : "border-line"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-primary-light text-xs font-semibold text-ink">
+                            {index + 1}
+                          </span>
+                          <span className="truncate text-xs uppercase tracking-wide text-ink-muted">
+                            {question.type?.replace(/_/g, " ")}
+                          </span>
+                        </div>
+                        <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${showCorrect ? (isCorrect ? "text-success" : "text-danger") : "text-ink-muted"}`}>
+                          {showCorrect ? `${awarded} / ${question.points} pts` : `${question.points} pts`}
                         </span>
                       </div>
-                      <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${showCorrect ? (isCorrect ? "text-success" : "text-danger") : "text-ink-muted"}`}>
-                        {showCorrect ? `${awarded} / ${question.points} pts` : `${question.points} pts`}
-                      </span>
-                    </div>
 
-                    <p className="mt-2.5 text-sm leading-relaxed text-ink">{question.question}</p>
+                      <p className="mt-2.5 text-sm leading-relaxed text-ink">{question.question}</p>
 
-                    <div className={`mt-3 grid gap-3 ${showCorrect ? "sm:grid-cols-2" : ""}`}>
-                      <div className="rounded-sm border border-line bg-surface p-3">
-                        <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">Your Answer</p>
-                        <p className={`mt-1 whitespace-pre-wrap break-words text-sm ${
-                          showCorrect ? (isCorrect ? "text-success" : "text-danger") : "text-ink"
-                        }`}>
-                          {answer?.answer || "(No answer provided)"}
-                        </p>
-                      </div>
-                      {showCorrect && (
+                      <div className={`mt-3 grid gap-3 ${showCorrect ? "sm:grid-cols-2" : ""}`}>
                         <div className="rounded-sm border border-line bg-surface p-3">
-                          <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">Correct Answer</p>
-                          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-ink">
-                            {question.modelAnswer || question.correctAnswer || "—"}
+                          <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">Your Answer</p>
+                          <p className={`mt-1 whitespace-pre-wrap break-words text-sm ${
+                            showCorrect ? (isCorrect ? "text-success" : "text-danger") : "text-ink"
+                          }`}>
+                            {answer?.answer || "(No answer provided)"}
                           </p>
+                        </div>
+                        {showCorrect && (
+                          <div className="rounded-sm border border-line bg-surface p-3">
+                            <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">Correct Answer</p>
+                            <p className="mt-1 whitespace-pre-wrap break-words text-sm text-ink">
+                              {question.modelAnswer || question.correctAnswer || "—"}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {answer?.gradingMethod && showCorrect && (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {answer.gradingMethod === "manual" && (
+                            <Badge variant="neutral">Manually graded</Badge>
+                          )}
+                          {answer.gradingMethod === "manual_review" && (
+                            <Badge variant="warning">
+                              {answer.gradingStatus === "graded" ? "Reviewed by coordinator" : "Pending coordinator review"}
+                            </Badge>
+                          )}
+                          {answer.gradingMethod === "exact_match" && (
+                            <Badge variant="success">Auto-graded</Badge>
+                          )}
+                        </div>
+                      )}
+
+                      {showCorrect && question.explanation && (
+                        <div className="mt-3 rounded-sm bg-canvas px-3 py-2 text-[13px] leading-relaxed text-stone-600">
+                          <strong className="font-semibold text-ink">Explanation:</strong>{" "}
+                          {question.explanation}
                         </div>
                       )}
                     </div>
+                  );
+                };
 
-                    {answer?.gradingMethod && showCorrect && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {answer.gradingMethod === "manual" && (
-                          <Badge variant="neutral">Manually graded</Badge>
-                        )}
-                        {answer.gradingMethod === "manual_review" && (
-                          <Badge variant="warning">
-                            {answer.gradingStatus === "graded" ? "Reviewed by coordinator" : "Pending coordinator review"}
-                          </Badge>
-                        )}
-                        {answer.gradingMethod === "exact_match" && (
-                          <Badge variant="success">Auto-graded</Badge>
-                        )}
-                      </div>
-                    )}
+                // No sectioning on this exam — one continuous list.
+                if (groups.length === 0) {
+                  return (
+                    <div className="space-y-4">
+                      {questions.map(renderQuestionCard)}
+                    </div>
+                  );
+                }
 
-                    {showCorrect && question.explanation && (
-                      <div className="mt-3 rounded-sm bg-canvas px-3 py-2 text-[13px] leading-relaxed text-stone-600">
-                        <strong className="font-semibold text-ink">Explanation:</strong>{" "}
-                        {question.explanation}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                // Section-wise grouping; numbering stays global (1..N).
+                return groups.map((group) => (
+                  <section key={group.key}>
+                    <div className="flex items-center justify-between gap-3 border-b border-line pb-1.5">
+                      <h4 className="truncate text-[13px] font-semibold uppercase tracking-wide text-ink">
+                        {nameById.get(group.key) || group.name}
+                      </h4>
+                      <span className="shrink-0 text-xs text-ink-muted">
+                        {group.indices.length} question{group.indices.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-4">
+                      {group.indices.map((qIndex) => renderQuestionCard(questions[qIndex], qIndex))}
+                    </div>
+                  </section>
+                ));
+              })()}
             </div>
 
             <div className="border-t border-line pt-4 text-[13px] text-ink-muted">

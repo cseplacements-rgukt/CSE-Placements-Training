@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { examService } from "../services/examService";
@@ -9,6 +9,7 @@ import Button from "../components/ui/Button";
 import Badge from "../components/ui/Badge";
 import Modal from "../components/ui/Modal";
 import { LoadingScreen } from "../components/ui/Spinner";
+import { buildSectionGroups, sectionNamesById } from "../lib/examSections";
 import { loadFaceApi } from "../lib/faceApi";
 
 const CalibrationScreen = lazy(() => import("../components/CalibrationScreen"));
@@ -30,12 +31,58 @@ const DIFFICULTY_BADGE = {
 const PALETTE_BASE =
   "flex h-9 w-9 items-center justify-center rounded-sm border text-[13px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50";
 
+// Numbered navigation grid. `indices` selects a subset of the flat question
+// array (one section) while keeping the global 1..N numbering intact.
+const PaletteGrid = memo(function PaletteGrid({
+  questions,
+  indices,
+  answers,
+  currentQuestion,
+  allowBackNav,
+  onSelect,
+}) {
+  return (
+    <div className="grid grid-cols-8 gap-1.5 lg:grid-cols-5">
+      {(indices || questions.map((_, i) => i)).map((index) => {
+        const q = questions[index];
+        const isCurrent = index === currentQuestion;
+        const isAnswered = answers[q._id] && String(answers[q._id]).trim() !== "";
+        const disabled = !allowBackNav && index < currentQuestion;
+        let cls;
+        if (isCurrent) {
+          cls = "border-primary bg-primary text-white";
+        } else if (disabled) {
+          cls = "border-line bg-surface text-stone-300 cursor-not-allowed";
+        } else if (isAnswered) {
+          cls = "border-green-300 bg-green-50 text-green-700 hover:border-success";
+        } else {
+          cls = "border-line bg-surface text-ink-muted hover:border-stone-300 hover:bg-canvas";
+        }
+        return (
+          <button
+            key={q._id}
+            type="button"
+            onClick={() => onSelect(index)}
+            disabled={disabled}
+            aria-label={`Go to question ${index + 1}${isAnswered ? " (answered)" : ""}${isCurrent ? " (current)" : ""}`}
+            aria-current={isCurrent ? "true" : undefined}
+            className={`${PALETTE_BASE} ${cls}`}
+          >
+            {index + 1}
+          </button>
+        );
+      })}
+    </div>
+  );
+});
+
 const QuestionCard = memo(function QuestionCard({
   question,
   index,
   total,
   answer,
   onAnswerChange,
+  sectionName,
 }) {
   const getWordCount = (text) =>
     text ? text.trim().split(/\s+/).filter((word) => word.length > 0).length : 0;
@@ -55,6 +102,7 @@ const QuestionCard = memo(function QuestionCard({
             <span className="font-normal text-ink-muted">of {total}</span>
           </h2>
           <div className="flex items-center gap-1.5">
+            {sectionName && <Badge variant="neutral">{sectionName}</Badge>}
             {difficulty && (
               <Badge variant={DIFFICULTY_BADGE[difficulty] || "neutral"}>
                 {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
@@ -181,6 +229,10 @@ const TakeExam = () => {
   const focusWarningTimerRef = useRef(null);
   const examRef = useRef(null);
   const submittingRef = useRef(false);
+  // Set once the server accepts a submission — blocks any further submit
+  // attempt (e.g. a time-up auto-submit firing while the success dialog is
+  // open) without disabling UI interaction.
+  const submittedRef = useRef(false);
   const proctoringSessionRef = useRef(null);
   const focusLostAtRef = useRef(null);
   const monitoringEnabledRef = useRef(false);
@@ -277,6 +329,48 @@ const TakeExam = () => {
     const timer = setInterval(() => setGateTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, [submitUnlockAt]);
+
+  // ── Section-aware navigation palette ────────────────────────────────────
+  // exam.questions is one flat array; sections are display buckets over it.
+  const sectionGroups = useMemo(
+    () => (exam ? buildSectionGroups(exam.questions || [], exam.sections) : []),
+    [exam],
+  );
+
+  const sectionNameById = useMemo(
+    () => sectionNamesById(exam?.sections),
+    [exam],
+  );
+
+  const [openSections, setOpenSections] = useState(() => new Set());
+
+  // The section holding the current question is always expanded, so students
+  // never land inside a collapsed group when navigating via Prev/Next.
+  const activeSectionKey = useMemo(() => {
+    for (const group of sectionGroups) {
+      if (group.indices.includes(currentQuestion)) return group.key;
+    }
+    return null;
+  }, [sectionGroups, currentQuestion]);
+
+  useEffect(() => {
+    if (!activeSectionKey) return;
+    setOpenSections((prev) =>
+      prev.has(activeSectionKey) ? prev : new Set(prev).add(activeSectionKey),
+    );
+  }, [activeSectionKey]);
+
+  const toggleSectionOpen = useCallback((key) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
 
   // ── Fullscreen restore helpers ────────────────────────────────────────────
   const clearRestoreTimers = useCallback(() => {
@@ -1191,7 +1285,7 @@ const TakeExam = () => {
   };
 
   const handleSubmit = async (autoSubmit = false) => {
-    if (submittingRef.current) return;
+    if (submittingRef.current || submittedRef.current) return;
 
     // Validate word limits
     if (!autoSubmit) {
@@ -1271,6 +1365,13 @@ const TakeExam = () => {
       const pendingReview =
         result.gradingStatus === "pending_review" ||
         result.submission?.status === "partially_graded";
+
+      // Submission accepted. Release `submitting` BEFORE showing the outcome
+      // dialog — the dialog's action buttons ("Go to Dashboard") render with
+      // disabled={submitting}, so leaving it true left the button dead.
+      // submittedRef keeps any stray time-up auto-submit a no-op meanwhile.
+      submittedRef.current = true;
+      setSubmitting(false);
 
       // Show the outcome while still in fullscreen; release camera + fullscreen
       // only after the student acknowledges it.
@@ -1531,6 +1632,22 @@ const TakeExam = () => {
               </svg>
               <span className="tabular-nums">{trustScore}%</span>
             </div>
+            {/* Always-visible submit: reachable from ANY question — students
+                should not have to navigate to the last question to finish.
+                Mirrors the min-duration gate and submitting/time-up states. */}
+            <Button
+              size="sm"
+              className="shrink-0 tabular-nums"
+              onClick={() => handleSubmit(false)}
+              disabled={submitting || timeUp || gateActive}
+              title={gateActive ? `Submitting unlocks in ${gateClock}` : undefined}
+            >
+              {gateActive
+                ? `Locked ${gateClock}`
+                : submitting || timeUp
+                  ? "Submitting…"
+                  : "Submit Exam"}
+            </Button>
           </div>
         </div>
       </header>
@@ -1618,7 +1735,7 @@ const TakeExam = () => {
         <div className="lg:flex lg:items-start lg:gap-6">
 
           {/* Palette (above question on mobile, sidebar on desktop) */}
-          <aside className="mb-4 w-full lg:order-2 lg:mb-0 lg:w-56 lg:shrink-0">
+          <aside className="mb-4 w-full lg:sticky lg:top-16 lg:order-2 lg:mb-0 lg:w-56 lg:shrink-0">
             <details open className="group rounded-md border border-line bg-surface shadow-sm lg:open">
               <summary className="flex cursor-pointer list-none select-none items-center justify-between px-4 py-3 text-sm font-semibold text-ink [&::-webkit-details-marker]:hidden">
                 Questions
@@ -1626,37 +1743,72 @@ const TakeExam = () => {
                   {answeredCount}/{exam.questions.length} answered
                 </span>
               </summary>
-              <div className="border-t border-line px-4 pb-4 pt-3">
-                <div className="grid grid-cols-8 gap-1.5 lg:grid-cols-5">
-                  {exam.questions.map((q, index) => {
-                    const isCurrent = index === currentQuestion;
-                    const isAnswered = answers[q._id] && String(answers[q._id]).trim() !== "";
-                    const disabled = !allowBackNav && index < currentQuestion;
-                    let cls;
-                    if (isCurrent) {
-                      cls = "border-primary bg-primary text-white";
-                    } else if (disabled) {
-                      cls = "border-line bg-surface text-stone-300 cursor-not-allowed";
-                    } else if (isAnswered) {
-                      cls = "border-green-300 bg-green-50 text-green-700 hover:border-success";
-                    } else {
-                      cls = "border-line bg-surface text-ink-muted hover:border-stone-300 hover:bg-canvas";
-                    }
-                    return (
-                      <button
-                        key={q._id}
-                        type="button"
-                        onClick={() => goToQuestion(index)}
-                        disabled={disabled}
-                        aria-label={`Go to question ${index + 1}${isAnswered ? " (answered)" : ""}${isCurrent ? " (current)" : ""}`}
-                        aria-current={isCurrent ? "true" : undefined}
-                        className={`${PALETTE_BASE} ${cls}`}
-                      >
-                        {index + 1}
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="border-t border-line px-4 pb-4 pt-3 lg:max-h-[calc(100vh-13rem)] lg:overflow-y-auto">
+                {sectionGroups.length === 0 ? (
+                  <PaletteGrid
+                    questions={exam.questions}
+                    answers={answers}
+                    currentQuestion={currentQuestion}
+                    allowBackNav={allowBackNav}
+                    onSelect={goToQuestion}
+                  />
+                ) : (
+                  <div className="space-y-2.5">
+                    {sectionGroups.map((group) => {
+                      const isOpen = openSections.has(group.key);
+                      const answeredInSection = group.indices.reduce(
+                        (count, qIndex) => {
+                          const a = answers[exam.questions[qIndex]._id];
+                          return count + (a && String(a).trim() !== "" ? 1 : 0);
+                        },
+                        0,
+                      );
+                      return (
+                        <div key={group.key}>
+                          <button
+                            type="button"
+                            onClick={() => toggleSectionOpen(group.key)}
+                            aria-expanded={isOpen}
+                            className="flex w-full items-center justify-between gap-2 rounded-sm px-1 py-1 text-left text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                          >
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                                className={`shrink-0 text-ink-muted transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`}
+                              >
+                                <polyline points="9 18 15 12 9 6" />
+                              </svg>
+                              <span className="truncate">{group.name}</span>
+                            </span>
+                            <span className="shrink-0 text-[11px] font-normal tabular-nums text-ink-muted">
+                              {answeredInSection}/{group.indices.length}
+                            </span>
+                          </button>
+                          {isOpen && (
+                            <div className="mt-1.5">
+                              <PaletteGrid
+                                questions={exam.questions}
+                                indices={group.indices}
+                                answers={answers}
+                                currentQuestion={currentQuestion}
+                                allowBackNav={allowBackNav}
+                                onSelect={goToQuestion}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <ul className="mt-3 space-y-1.5 border-t border-line pt-3 text-xs text-ink-muted">
                   <li className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 rounded-[3px] border border-primary bg-primary" /> Current
@@ -1669,6 +1821,23 @@ const TakeExam = () => {
                   </li>
                 </ul>
               </div>
+              {/* Pinned below the scrollable palette — submit from any question
+                  without scrolling or jumping to the last one (desktop only;
+                  on mobile the header button covers this). */}
+              <div className="hidden border-t border-line px-4 py-3 lg:block">
+                <Button
+                  className="w-full tabular-nums"
+                  onClick={() => handleSubmit(false)}
+                  disabled={submitting || timeUp || gateActive}
+                  title={gateActive ? `Submitting unlocks in ${gateClock}` : undefined}
+                >
+                  {gateActive
+                    ? `Locked ${gateClock}`
+                    : submitting || timeUp
+                      ? "Submitting…"
+                      : "Submit Exam"}
+                </Button>
+              </div>
             </details>
           </aside>
 
@@ -1680,6 +1849,11 @@ const TakeExam = () => {
               total={exam.questions.length}
               answer={answers[currentQ._id]}
               onAnswerChange={handleAnswerChange}
+              sectionName={
+                currentQ.sectionId
+                  ? sectionNameById.get(String(currentQ.sectionId))
+                  : undefined
+              }
             />
 
             <div className="mt-4 flex items-center justify-between gap-3">
