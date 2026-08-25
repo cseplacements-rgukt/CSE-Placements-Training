@@ -883,6 +883,7 @@ router.post("/join", verifyFirebaseToken, examCodeLimiter, async (req, res) => {
         autoSubmitOnTimeUp: exam.settings?.autoSubmitOnTimeUp,
         passingScore: exam.settings?.passingScore,
         minDurationMinutes: exam.settings?.minDurationMinutes ?? 0,
+        enableCalculator: exam.settings?.enableCalculator ?? false,
       },
       hasActiveAttempt: existingSubmission?.status === "in_progress",
       windowState,

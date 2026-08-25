@@ -89,6 +89,7 @@ describe("Exam Model", () => {
       expect(exam.settings.maxAttempts).toBe(1);
       expect(exam.settings.passingScore).toBe(50);
       expect(exam.settings.autoSubmitOnTimeUp).toBe(true);
+      expect(exam.settings.enableCalculator).toBe(false);
     });
 
   });

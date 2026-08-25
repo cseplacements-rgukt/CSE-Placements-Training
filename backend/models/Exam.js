@@ -241,6 +241,12 @@ const examSchema = new mongoose.Schema({
       type: Boolean,
       default: true,
     },
+    // On-screen scientific calculator for students during this exam.
+    // Purely client-side — the backend only stores/serves the flag.
+    enableCalculator: {
+      type: Boolean,
+      default: false,
+    },
     maxAttempts: {
       type: Number,
       default: 1,

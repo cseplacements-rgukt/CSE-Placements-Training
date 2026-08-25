@@ -530,6 +530,7 @@ const ExamDraftWorkspace = () => {
         allowBackNavigation: true,
         showResultsImmediately: true,
         autoSubmitOnTimeUp: true,
+        enableCalculator: false,
         maxAttempts: 1,
         passingScore: 50,
         minDurationMinutes: 0,
@@ -1011,7 +1012,7 @@ const ExamDraftWorkspace = () => {
                         ["requireWebcam", "Require Webcam"], ["requireFullscreen", "Require Fullscreen"],
                         ["shuffleQuestions", "Shuffle Questions"], ["shuffleOptions", "Shuffle Options"],
                         ["allowBackNavigation", "Allow Back Navigation"], ["showResultsImmediately", "Show Results Immediately"],
-                        ["autoSubmitOnTimeUp", "Auto Submit on Timeout"],
+                        ["autoSubmitOnTimeUp", "Auto Submit on Timeout"], ["enableCalculator", "Scientific Calculator"],
                       ].map(([key, label]) => (
                         <label key={key} className="flex cursor-pointer items-center gap-2.5 text-sm text-ink">
                           <input

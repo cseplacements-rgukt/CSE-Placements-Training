@@ -4,6 +4,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { examService } from "../services/examService";
 import { RichContent, RichInline, QuestionBody } from "../components/RichContent";
 import ExamTimer from "../components/ExamTimer";
+import ExamCalculator from "../components/ExamCalculator";
 import GazeTracker from "../components/GazeTracker";
 import Button from "../components/ui/Button";
 import Badge from "../components/ui/Badge";
@@ -1480,6 +1481,20 @@ const TakeExam = () => {
                 {exam.instructions ||
                   "Please read the following instructions carefully before starting the exam."}
               </p>
+              {exam.settings?.enableCalculator && (
+                <p className="mt-3 flex items-center gap-2 rounded-sm border border-line bg-primary-light px-3 py-2 text-[13px] font-medium text-ink">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                    <rect x="4" y="2" width="16" height="20" rx="2" />
+                    <line x1="8" y1="6" x2="16" y2="6" />
+                    <line x1="8" y1="11" x2="8" y2="11.01" />
+                    <line x1="12" y1="11" x2="12" y2="11.01" />
+                    <line x1="16" y1="11" x2="16" y2="11.01" />
+                    <line x1="8" y1="15" x2="12" y2="15.01" />
+                    <line x1="16" y1="15" x2="16" y2="15.01" />
+                  </svg>
+                  An on-screen scientific calculator will be available during the exam.
+                </p>
+              )}
             </section>
 
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
@@ -1715,6 +1730,10 @@ const TakeExam = () => {
           </div>
         </div>
       )}
+
+      {/* ── Floating scientific calculator (bottom-right, exam-enabled) ──
+          Purely client-side; toggled per-exam via settings.enableCalculator. */}
+      {exam.settings?.enableCalculator && <ExamCalculator />}
 
       {focusWarning && (
         <div
