@@ -103,7 +103,9 @@ const submissionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ["in_progress", "submitted", "grading", "graded", "partially_graded", "flagged", "locked"],
+    // processing_submission is the transient lock held while POST / (submit)
+    // grades a submission; it bypasses doc-level saves so it lives here too.
+    enum: ["in_progress", "submitted", "processing_submission", "grading", "graded", "partially_graded", "flagged", "locked"],
     default: "in_progress",
   },
   gradingCompletedAt: {
@@ -137,6 +139,16 @@ const submissionSchema = new mongoose.Schema({
   autoSaveCount: {
     type: Number,
     default: 0,
+  },
+  // Set by the submission sweeper when the exam window closed without a
+  // client submit (tab closed, crash, network loss) — answers were graded
+  // from auto-saves.
+  systemFinalized: {
+    type: Boolean,
+    default: false,
+  },
+  systemFinalizedAt: {
+    type: Date,
   },
   // Review by proctor
   reviewedBy: {

@@ -61,6 +61,10 @@ app.use(bodyParser.urlencoded({ extended: true, limit: "1mb" }));
 // Connect to database (only if not running tests, since tests use MongoMemoryServer)
 if (process.env.NODE_ENV !== "test") {
   connectDB();
+  // Auto-finalize submissions whose exam window closed without a client
+  // submit (tab closed / laptop slept / crashed / network loss at expiry).
+  const { startSubmissionSweeper } = require("./services/submissionSweeper");
+  startSubmissionSweeper();
 }
 
 // Routes

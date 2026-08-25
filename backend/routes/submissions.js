@@ -9,10 +9,8 @@ const { submissionLimiter, autoSaveLimiter } = require("../middleware/rateLimite
 const { gradeMCQ, EXACT_MATCH_TYPES, MANUAL_REVIEW_TYPES } = require("../services/autoGrader");
 
 const { snapshotFieldsFromUser, applyStudentSnapshotFallback } = require("../utils/studentSnapshot");
-const {
-  resolveRosterStudent,
-  rosterStudentIdFromToken,
-} = require("../utils/rosterIdentity");
+const { resolveRosterStudent, rosterStudentIdFromToken } = require("../utils/rosterIdentity");
+const { finalizeExpiredSubmissions } = require("../services/submissionSweeper");
 
 // ── Result release gating ───────────────────────────────────────────────────
 // Students never see scores before the WHOLE exam window closes: results are
@@ -547,6 +545,11 @@ router.get("/exam/:examId", verifyFirebaseToken, async (req, res) => {
         .status(403)
         .json({ message: "You can only view submissions for your own exams" });
     }
+
+    // Self-heal before listing: finalize any stale in_progress rows whose
+    // window has closed so the page never shows long-dead attempts as
+    // "In Progress". No-op when there is nothing to finalize.
+    await finalizeExpiredSubmissions();
 
     // Bound the result set — a single exam realistically has ≤ a few hundred
     // submissions; the cap protects against unbounded growth over many exams.

@@ -540,9 +540,10 @@ const TakeExam = () => {
         return;
       }
 
-      if (activeExam.settings?.requireWebcam !== false) {
-        await startProctoring(token, activeExam, submissionData.submission._id);
-      }
+      // A proctoring session must exist for every exam so trust score and
+      // violation tracking always work; only the camera pipeline depends
+      // on requireWebcam (handled inside startProctoring).
+      await startProctoring(token, activeExam, submissionData.submission._id);
 
       // Honor the exam's fullscreen setting (default: required). When not
       // required, no request and no exit-violation logging happen at all.
@@ -590,16 +591,20 @@ const TakeExam = () => {
       if (examParam?.settings?.requireWebcam !== false) {
         setCalibrationRequired(true);
       } else {
-        // Skip calibration if camera not required
+        // Camera not required: skip calibration and never touch getUserMedia,
+        // but monitoring (tab switches, focus loss, trust score) still runs.
         setCalibrationComplete(true);
         monitoringEnabledRef.current = true;
         monitoringStartedAtRef.current = Date.now();
-        await startWebcam();
-        startLiveFaceDetection();
-        startGazeTracking();
       }
     } catch (error) {
       console.error("Error starting proctoring:", error);
+      // Session creation failed — still arm local monitoring so tab switches
+      // and focus loss are counted (and sent with the submission) even if
+      // the server-side score sync is unavailable.
+      setCalibrationComplete(true);
+      monitoringEnabledRef.current = true;
+      monitoringStartedAtRef.current = Date.now();
     }
   };
 
@@ -1360,7 +1365,26 @@ const TakeExam = () => {
         fullscreenExitCount,
       };
 
-      const result = await examService.submitExam(token, submissionData);
+      // Auto-submit at time-up must not die on a single network hiccup:
+      // retry with backoff while the page is still alive. If every attempt
+      // fails, the server-side sweeper finalizes from auto-saves anyway.
+      let result = null;
+      let lastSubmitError = null;
+      const retryDelays = [3000, 6000, 12000];
+      for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        try {
+          result = await examService.submitExam(token, submissionData);
+          break;
+        } catch (err) {
+          lastSubmitError = err;
+          if (!autoSubmit || attempt === retryDelays.length) break;
+          console.warn(
+            `Auto-submit attempt ${attempt + 1} failed — retrying in ${retryDelays[attempt] / 1000}s`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
+        }
+      }
+      if (!result) throw lastSubmitError;
 
       const pendingReview =
         result.gradingStatus === "pending_review" ||
@@ -1392,11 +1416,12 @@ const TakeExam = () => {
     } catch (error) {
       console.error("Error submitting exam:", error);
       await showNotice({
-        title: "Submission failed",
-        message:
-          "Your exam could not be submitted: " +
-          (error.response?.data?.message || error.message) +
-          ". You are still in the exam — please try again. Your answers remain auto-saved.",
+        title: autoSubmit ? "Auto-submission failed" : "Submission failed",
+        message: autoSubmit
+          ? "Your exam could not be submitted due to a connection problem. Your answers remain auto-saved — the server will close and grade your attempt automatically when the exam window ends."
+          : "Your exam could not be submitted: " +
+            (error.response?.data?.message || error.message) +
+            ". You are still in the exam — please try again. Your answers remain auto-saved.",
         tone: "danger",
       });
       // Submission failed: hand control back to the student untouched —
