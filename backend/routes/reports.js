@@ -275,29 +275,36 @@ async function generateStudentPerformance(startDate, endDate) {
     .lean();
   const liveIds = new Set(students.map((s) => String(s._id)));
 
-  const studentBreakdown = await Promise.all(
-    students.map(async (student) => {
-      const submissions = await Submission.find({
-        studentId: student._id,
-        submittedAt: { $gte: startDate, $lte: endDate },
-      }).lean();
+  // Single query for all submissions in range - avoids 739 concurrent finds (was ~8s)
+  const allSubs = await Submission.find({
+    submittedAt: { $gte: startDate, $lte: endDate },
+  })
+    .select("studentId percentage isFlagged")
+    .lean();
+  const byStudent = new Map();
+  for (const s of allSubs) {
+    const key = String(s.studentId?._id ?? s.studentId);
+    if (!byStudent.has(key)) byStudent.set(key, []);
+    byStudent.get(key).push(s);
+  }
 
-      const scores = submissions.map((s) => s.percentage);
-      const avgScore =
-        scores.length > 0
-          ? scores.reduce((a, b) => a + b, 0) / scores.length
-          : 0;
-      const flaggedCount = submissions.filter((s) => s.isFlagged).length;
+  const studentBreakdown = students.map((student) => {
+    const submissions = byStudent.get(String(student._id)) || [];
+    const scores = submissions.map((s) => s.percentage);
+    const avgScore =
+      scores.length > 0
+        ? scores.reduce((a, b) => a + b, 0) / scores.length
+        : 0;
+    const flaggedCount = submissions.filter((s) => s.isFlagged).length;
 
-      return {
-        studentId: student._id,
-        name: student.name,
-        examsAttempted: submissions.length,
-        averageScore: Math.round(avgScore),
-        flaggedCount,
-      };
-    }),
-  );
+    return {
+      studentId: student._id,
+      name: student.name,
+      examsAttempted: submissions.length,
+      averageScore: Math.round(avgScore),
+      flaggedCount,
+    };
+  });
 
   // Deleted roster accounts: their submissions are intentionally kept (with
   // a denormalized identity snapshot), so include them here to preserve
