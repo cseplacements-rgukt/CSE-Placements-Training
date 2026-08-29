@@ -353,7 +353,7 @@ router.post("/:id/collaborators", verifyFirebaseToken, async (req, res) => {
 
     const invitee = await User.findOne({ email: email.trim().toLowerCase() });
     if (!invitee) {
-      return res.status(404).json({ message: "No MOD-U-GO account found with that email." });
+      return res.status(404).json({ message: "No CSE Placements Training account found with that email." });
     }
     if (!["coordinator", "admin", "super_admin"].includes(invitee.role)) {
       return res.status(400).json({ message: "Only training-team staff (coordinator tier) can be added as collaborators." });

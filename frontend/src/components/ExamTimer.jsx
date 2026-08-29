@@ -4,15 +4,20 @@ import React, { useEffect, useRef, useState } from "react";
  * Self-contained countdown: ticks in its own local state so a once-per-second
  * update never re-renders the surrounding exam page. Parent only hears about
  * milestone warnings and time-up through stable callbacks.
+ * serverOffsetMs = serverTimeMs - Date.now() at sync moment. If provided the
+ * timer uses server-corrected now, so a wrong laptop clock cannot auto-submit
+ * early or hide the timer.
  */
-const ExamTimer = ({ endAt, onTimeUp, onMilestone }) => {
+const ExamTimer = ({ endAt, onTimeUp, onMilestone, serverOffsetMs = 0 }) => {
+  const getNowMs = () => Date.now() + (Number(serverOffsetMs) || 0);
   const computeRemaining = () =>
-    endAt ? Math.max(0, Math.floor((endAt - Date.now()) / 1000)) : 0;
+    endAt ? Math.max(0, Math.floor((endAt - getNowMs()) / 1000)) : 0;
 
   const [remaining, setRemaining] = useState(computeRemaining);
   const firedRef = useRef({});
   const onTimeUpRef = useRef(onTimeUp);
   const onMilestoneRef = useRef(onMilestone);
+  const offsetRef = useRef(serverOffsetMs);
 
   useEffect(() => {
     onTimeUpRef.current = onTimeUp;
@@ -20,12 +25,18 @@ const ExamTimer = ({ endAt, onTimeUp, onMilestone }) => {
   useEffect(() => {
     onMilestoneRef.current = onMilestone;
   }, [onMilestone]);
+  useEffect(() => {
+    offsetRef.current = serverOffsetMs;
+    // Re-sync remaining immediately when offset updates (e.g. after clock sync)
+    setRemaining(computeRemaining());
+  }, [serverOffsetMs]);
 
   useEffect(() => {
     if (!endAt) return undefined;
 
     const tick = () => {
-      const secs = computeRemaining();
+      const nowMs = Date.now() + (Number(offsetRef.current) || 0);
+      const secs = endAt ? Math.max(0, Math.floor((endAt - nowMs) / 1000)) : 0;
       setRemaining(secs);
 
       if (secs <= 0) {
@@ -46,7 +57,6 @@ const ExamTimer = ({ endAt, onTimeUp, onMilestone }) => {
     const timer = setInterval(tick, 1000);
     tick();
     return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endAt]);
 
   const hours = Math.floor(remaining / 3600);

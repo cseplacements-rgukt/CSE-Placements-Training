@@ -112,7 +112,7 @@ async function provisionStaffAccount({ name, email, role, actorName, password })
   await Notification.create({
     userId: user._id,
     type: "account_update",
-    title: "Welcome to MOD-U-GO",
+    title: "Welcome to CSE Placements Training",
     message: `Your ${role} account was created by ${
       actorName || "an administrator"
     }. Sign in with the temporary password you were given.`,

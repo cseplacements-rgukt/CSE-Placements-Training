@@ -334,6 +334,12 @@ export const examService = {
     return response.data;
   },
 
+  // ─── Server clock sync ─────────────────────────────────────────────────────
+  getServerTime: async () => {
+    const response = await api.get("/time");
+    return response.data;
+  },
+
   // ─── Calibration ───────────────────────────────────────────────────────────
   saveCalibration: async (token, sessionId, calibrationData) => {
     const response = await api.post(`/proctoring/${sessionId}/calibrate`, calibrationData, authHeader(token));

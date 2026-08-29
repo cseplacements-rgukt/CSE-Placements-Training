@@ -84,12 +84,17 @@ app.use("/api/uploads", require("./routes/uploads"));
 // Grading is fully deterministic (no external services) — no queue needed.
 
 app.get("/", (req, res) => {
-  res.json({ message: "MOD-U-GO API is running", version: "2.0.0" });
+  res.json({ message: "CSE Placements Training API is running", version: "2.0.0" });
 });
 
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ status: "healthy", timestamp: new Date() });
+});
+
+// Server clock sync — public, no auth. Used to correct client Date.now() drift.
+app.get("/api/time", (req, res) => {
+  res.json({ serverTime: new Date().toISOString(), serverTimeMs: Date.now() });
 });
 
 // Error handling middleware

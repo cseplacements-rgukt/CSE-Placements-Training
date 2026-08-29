@@ -37,18 +37,18 @@ const { ROLE_ALIASES } = require("../models/User");
 const STAFF_PASSWORD = "123456";
 
 const SUPER_ADMIN = {
-  name: "Dr. Anitha Rao",
-  email: "owner@modugo.test",
+  name: "Cse Placements Training",
+  email: "cseplacements@rguktsklm.ac.in",
 };
 const ADMINS = [
-  { name: "Ravi Kumar", email: "admin1@modugo.test", role: "admin" },
-  { name: "Sunitha Devi", email: "admin2@modugo.test", role: "admin" },
-  { name: "Kiran Raj", email: "admin3@modugo.test", role: "admin" },
+  { name: "Ravi Kumar", email: "admin1@cseplacements.test", role: "admin" },
+  { name: "Sunitha Devi", email: "admin2@cseplacements.test", role: "admin" },
+  { name: "Kiran Raj", email: "admin3@cseplacements.test", role: "admin" },
 ];
 const COORDINATORS = [
-  { name: "Priya Sharma", email: "coord1@modugo.test", role: "coordinator" },
-  { name: "Arjun Reddy", email: "coord2@modugo.test", role: "coordinator" },
-  { name: "Meena Iyer", email: "coord3@modugo.test", role: "coordinator" },
+  { name: "Priya Sharma", email: "coord1@cseplacements.test", role: "coordinator" },
+  { name: "Arjun Reddy", email: "coord2@cseplacements.test", role: "coordinator" },
+  { name: "Meena Iyer", email: "coord3@cseplacements.test", role: "coordinator" },
 ];
 // Demo students with their college exam-cell passwords hardcoded — in real
 // use the placement cell imports the actual issued passwords via CSV.

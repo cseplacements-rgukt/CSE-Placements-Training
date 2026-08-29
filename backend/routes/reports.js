@@ -465,7 +465,7 @@ async function generateFlaggedSubmissions(user, startDate, endDate) {
 async function calculateAverageScore(examIds) {
   const submissions = await Submission.find({
     examId: { $in: examIds },
-    status: "submitted",
+    status: { $in: ["submitted", "graded", "partially_graded"] },
   }).lean();
   if (submissions.length === 0) return 0;
   return Math.round(
@@ -474,7 +474,7 @@ async function calculateAverageScore(examIds) {
 }
 
 async function calculateStudentAverageScore(studentId) {
-  const submissions = await Submission.find({ studentId, status: "submitted" }).lean();
+  const submissions = await Submission.find({ studentId, status: { $in: ["submitted", "graded", "partially_graded"] } }).lean();
   if (submissions.length === 0) return 0;
   return Math.round(
     submissions.reduce((a, b) => a + b.percentage, 0) / submissions.length,

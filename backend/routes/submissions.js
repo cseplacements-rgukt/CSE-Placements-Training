@@ -364,12 +364,34 @@ router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
     // We add a 60-second grace period for network latency during auto-submit.
     const individualEndTime = new Date(submission.startedAt.getTime() + (exam.duration * 60000) + 60000);
     const isLate = now > individualEndTime;
-    
-    // If they are late, we ignore the answers in the request payload and just grade what was auto-saved
+
+    // Late auto-submit: previously discarded the request payload and graded
+    // only auto-saved answers, which could be empty/partial -> spurious 0.
+    // Now we MERGE: auto-saved answers form the base, but any answer present
+    // in the submit payload (the freshest client state) overwrites it. This
+    // preserves every chosen answer even if the last auto-save missed it.
     let finalAnswersToGrade = answers;
     if (isLate) {
-      console.warn(`Late submission blocked for ${user.email}. Grading auto-saved answers only.`);
-      finalAnswersToGrade = submission.answers || [];
+      console.warn(`Late submission for ${user.email}. Merging payload onto auto-saved answers.`);
+      const payloadById = new Map(
+        (answers || [])
+          .filter((a) => a && a.questionId)
+          .map((a) => [String(a.questionId), a.answer || ""])
+      );
+      const base = Array.isArray(submission.answers) ? submission.answers : [];
+      // Start from whatever is persisted; overlay payload values
+      const merged = base.map((a) => {
+        const key = String(a.questionId);
+        return payloadById.has(key) ? { questionId: a.questionId, answer: payloadById.get(key) } : { questionId: a.questionId, answer: a.answer || "" };
+      });
+      // Include any payload questions not yet in persisted array (edge case)
+      for (const [qid, ans] of payloadById) {
+        if (!merged.some((m) => String(m.questionId) === qid)) {
+          merged.push({ questionId: qid, answer: ans });
+        }
+      }
+      // If persisted array was empty (no auto-save yet), merged will be exactly payload
+      finalAnswersToGrade = merged.length > 0 ? merged : (answers || []);
     }
 
     // ── Grading: deterministic split (instant exact-match vs manual review) ──

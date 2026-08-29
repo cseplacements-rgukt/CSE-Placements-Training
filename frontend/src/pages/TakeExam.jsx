@@ -273,6 +273,11 @@ const TakeExam = () => {
   // Minimum-time floor: epoch ms when Submit unlocks (null = no floor).
   const [submitUnlockAt, setSubmitUnlockAt] = useState(null);
   const [, setGateTick] = useState(0); // re-render once per second while gated
+  // Server-clock correction: serverTimeMs - Date.now(). Positive if server ahead.
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
+  const serverOffsetRef = useRef(0);
+  const [clockWarning, setClockWarning] = useState(null);
+  const getServerNow = useCallback(() => Date.now() + serverOffsetRef.current, []);
 
   // Load exam data on mount (for instructions screen)
   useEffect(() => {
@@ -323,13 +328,19 @@ const TakeExam = () => {
     }
   });
 
+  // Keep offset ref in sync with state so stable callbacks see fresh value.
+  useEffect(() => {
+    serverOffsetRef.current = serverOffsetMs;
+  }, [serverOffsetMs]);
+
   // While the submit gate is active, tick once per second so the Submit
   // button label counts down. The interval exists only while gated.
+  // Uses server-corrected now so a wrong laptop clock doesn't lock/unlock early.
   useEffect(() => {
-    if (!submitUnlockAt || Date.now() >= submitUnlockAt) return undefined;
+    if (!submitUnlockAt || getServerNow() >= submitUnlockAt) return undefined;
     const timer = setInterval(() => setGateTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
-  }, [submitUnlockAt]);
+  }, [submitUnlockAt, getServerNow]);
 
   // ── Section-aware navigation palette ────────────────────────────────────
   // exam.questions is one flat array; sections are display buckets over it.
@@ -482,6 +493,35 @@ const TakeExam = () => {
     };
   };
 
+  // Fetch server clock and compute offset (serverTimeMs - Date.now()).
+  // Uses a simple half-RTT correction; failure falls back to 0 (no correction).
+  const syncServerClock = async () => {
+    try {
+      const before = Date.now();
+      const data = await examService.getServerTime();
+      const after = Date.now();
+      const rtt = after - before;
+      const serverMs = data.serverTimeMs ?? new Date(data.serverTime).getTime();
+      // Assume symmetric latency: server time corresponds to midpoint.
+      const offset = serverMs - (before + rtt / 2);
+      serverOffsetRef.current = offset;
+      setServerOffsetMs(offset);
+      if (Math.abs(offset) > 2 * 60 * 1000) {
+        const mins = Math.round(Math.abs(offset) / 60000);
+        const direction = offset > 0 ? "ahead" : "behind";
+        setClockWarning(
+          `Your system clock is ${mins} minute${mins === 1 ? "" : "s"} ${direction}. Timer is now synced to server time - please fix your OS clock after the exam.`
+        );
+      } else {
+        setClockWarning(null);
+      }
+      return offset;
+    } catch {
+      // No correction on failure - timer falls back to local clock.
+      return 0;
+    }
+  };
+
   // Start the actual exam session after instructions
   const startExamSession = async () => {
     try {
@@ -498,6 +538,8 @@ const TakeExam = () => {
       const activeExam = normalizeExamQuestions(submissionData.exam) || exam;
 
       // ── Timer calculation (Server Authoritative) ──
+      // Sync clock first so endAt comparison uses server time, not a drifted laptop.
+      await syncServerClock();
       const startedAt = new Date(submissionData.submission.startedAt);
       const individualEndTime = new Date(startedAt.getTime() + activeExam.duration * 60000);
       const globalEndTime = new Date(activeExam.endTime);
@@ -1308,8 +1350,9 @@ const TakeExam = () => {
 
     // Minimum-time floor — the server enforces this too, but failing there
     // would lock the student out with a confusing error, so mirror it here.
-    if (!autoSubmit && submitUnlockAt && Date.now() < submitUnlockAt) {
-      const remaining = Math.ceil((submitUnlockAt - Date.now()) / 60000);
+    // Use server-corrected time so a drifted clock doesn't block submit.
+    if (!autoSubmit && submitUnlockAt && getServerNow() < submitUnlockAt) {
+      const remaining = Math.ceil((submitUnlockAt - getServerNow()) / 60000);
       await showNotice({
         title: "Too early to submit",
         message: `You need to spend at least ${Math.ceil((submitUnlockAt - new Date(submission?.startedAt || Date.now()).getTime()) / 60000)} minutes on this exam before submitting. About ${remaining} minute${remaining === 1 ? "" : "s"} left.`,
@@ -1344,6 +1387,20 @@ const TakeExam = () => {
       // Fullscreen and the webcam stay ON for the entire submission — they are
       // only released in cleanup() below, after the exam has been submitted.
       const token = await getAuthToken();
+
+      // Ensure latest answers are persisted before submit so even a late
+      // auto-submit (isLate on server) can merge them instead of grading 0.
+      if (dirtyAnswersRef.current.size > 0) {
+        try {
+          await performAutoSave();
+        } catch {
+          // Best-effort: submit payload still carries the answers.
+        }
+        // If save still in-flight, wait briefly for it to settle.
+        if (autoSaveInFlightRef.current) {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
 
       // Flush any queued violations and close the proctoring session together,
       // so nothing recorded during the exam is lost or delayed. Uses the ref —
@@ -1637,9 +1694,9 @@ const TakeExam = () => {
   }
 
   const currentQ = exam.questions[currentQuestion];
-  const gateActive = !!submitUnlockAt && Date.now() < submitUnlockAt;
+  const gateActive = !!submitUnlockAt && getServerNow() < submitUnlockAt;
   const gateSecondsLeft = gateActive
-    ? Math.ceil((submitUnlockAt - Date.now()) / 1000)
+    ? Math.ceil((submitUnlockAt - getServerNow()) / 1000)
     : 0;
   const gateClock = `${String(Math.floor(gateSecondsLeft / 60)).padStart(2, "0")}:${String(gateSecondsLeft % 60).padStart(2, "0")}`;
 
@@ -1660,7 +1717,7 @@ const TakeExam = () => {
             <span aria-live="polite" className="hidden text-xs text-ink-muted sm:inline">
               {autoSaveStatus || (lastAutoSave ? `Saved ${lastAutoSave.toLocaleTimeString()}` : "")}
             </span>
-            <ExamTimer endAt={examEndAt} onTimeUp={handleTimeUp} onMilestone={handleTimeMilestone} />
+            <ExamTimer endAt={examEndAt} onTimeUp={handleTimeUp} onMilestone={handleTimeMilestone} serverOffsetMs={serverOffsetMs} />
             <div
               title="Trust score"
               className={`hidden items-center gap-1.5 rounded-sm border px-2.5 py-1.5 text-sm font-medium sm:flex ${
@@ -1691,6 +1748,13 @@ const TakeExam = () => {
           </div>
         </div>
       </header>
+
+      {clockWarning && (
+        <div role="alert" className="sticky top-14 z-20 flex items-start justify-between gap-3 border-b border-amber-300 bg-amber-100 px-4 py-2.5 sm:px-6">
+          <p className="mx-auto max-w-5xl flex-1 text-[13px] font-medium text-amber-900">{clockWarning}</p>
+          <button type="button" onClick={() => setClockWarning(null)} aria-label="Dismiss clock warning" className="shrink-0 rounded-sm p-0.5 text-amber-800 hover:opacity-70">✕</button>
+        </div>
+      )}
 
       {/* ── Floating webcam monitor (top-right corner, click-transparent) ──
           Rendered only when the exam requires a camera. It mounts before
