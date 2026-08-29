@@ -16,6 +16,7 @@ import Pagination from "../components/ui/Pagination";
 import usePagedData from "../hooks/usePagedData";
 import { Table, THead, TRHead, TH, TBody, TR, TD } from "../components/ui/Table";
 import { Input, Select } from "../components/ui/Input";
+import Modal from "../components/ui/Modal";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 
 const BATCH_YEARS = Array.from({ length: 12 }, (_, i) => 2020 + i);
