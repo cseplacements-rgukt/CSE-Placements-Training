@@ -1025,7 +1025,12 @@ const AdminDashboard = () => {
               Refresh
             </Button>
 
-            <h3 className="mb-2.5 mt-6 text-[15px] font-semibold text-ink">Active Sessions ({activeSessions.length})</h3>
+            <details className="group mt-6 rounded-md border border-line bg-surface" open={activeSessions.length>0 && activeSessions.length<6}>
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink hover:bg-canvas [&::-webkit-details-marker]:hidden">
+                <span>Active Sessions ({activeSessions.length})</span>
+                <span className="text-xs font-normal text-ink-muted">{activeSessions.length===0 ? "No active exams" : "On-demand - click to view"}</span>
+              </summary>
+              <div className="border-t border-line p-4">
             {activeSessions.length === 0 ? (
               <p className="text-[13px] italic text-ink-muted">No exams are being proctored right now.</p>
             ) : (
@@ -1058,8 +1063,16 @@ const AdminDashboard = () => {
                 </TBody>
               </Table>
             )}
+              </div>
+            </details>
 
-            <h3 className="mb-2.5 mt-7 text-[15px] font-semibold text-ink">Flagged / Pending Review ({flaggedSessions.length})</h3>
+            <details className="group mt-4 rounded-md border border-amber-200 bg-amber-50/30">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink hover:bg-amber-50 [&::-webkit-details-marker]:hidden">
+                <span>Flagged / Pending Review ({flaggedSessions.length})</span>
+                <span className="text-xs font-normal text-ink-muted">{flaggedSessions.length===0 ? "All clear" : "On-demand - open a test to review, not required"}</span>
+              </summary>
+              <div className="border-t border-amber-200 bg-surface p-4">
+              <p className="mb-3 text-[13px] text-ink-muted">No bulk action required. To override, open that test in <span className="font-medium">Exams &gt; View Submissions &gt; View Details</span> for the person, then use <span className="font-medium">Override</span> there.</p>
             {flaggedSessions.length === 0 ? (
               <p className="text-[13px] italic text-ink-muted">Nothing is awaiting review — all clear.</p>
             ) : (
@@ -1118,6 +1131,8 @@ const AdminDashboard = () => {
                 </TBody>
               </Table>
             )}
+              </div>
+            </details>
           </section>
         )}
 

@@ -726,13 +726,15 @@ const ExamSubmissions = () => {
               </div>
             </section>
 
-            {/* ── Proctoring Events ── */}
+            {/* ── Proctoring Events (collapsed by default - on-demand) ── */}
             {selectedSubmission.proctoringEvents?.length > 0 && (
-              <section>
-                <h3 className="mb-2.5 text-[15px] font-semibold text-ink">
-                  Proctoring Events ({selectedSubmission.proctoringEvents.length})
-                </h3>
-                <ul className="divide-y divide-line overflow-hidden rounded-md border border-line">
+              <details className="group rounded-md border border-line bg-surface">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink hover:bg-canvas [&::-webkit-details-marker]:hidden">
+                  <span>Proctoring Events ({selectedSubmission.proctoringEvents.length})</span>
+                  <span className="text-xs text-ink-muted group-open:hidden">Show</span>
+                  <span className="hidden text-xs text-ink-muted group-open:inline">Hide</span>
+                </summary>
+                <ul className="divide-y divide-line border-t border-line">
                   {selectedSubmission.proctoringEvents.map((event, index) => (
                     <li key={index} className="flex items-center gap-3 px-4 py-2.5 text-sm odd:bg-canvas">
                       <span className="w-20 shrink-0 text-xs tabular-nums text-ink-muted">
@@ -747,55 +749,65 @@ const ExamSubmissions = () => {
                     </li>
                   ))}
                 </ul>
-              </section>
+              </details>
             )}
 
-            {/* ── Violation Clips ── */}
-            <section>
-              <h3 className="mb-2.5 text-[15px] font-semibold text-ink">
-                Violation Clips ({violationClips.length})
-              </h3>
-              {violationClips.length > 0 ? (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {violationClips.map((clip, index) => (
-                    <div key={index} className="overflow-hidden rounded-md border border-line">
-                      <div className="flex items-center justify-between gap-2 bg-canvas px-3 py-2 text-xs">
-                        <span className="truncate font-medium capitalize text-ink">
-                          {clip.eventType ? clip.eventType.replace(/_/g, " ") : "violation"}
-                        </span>
-                        <span className="shrink-0 tabular-nums text-ink-muted">
-                          {new Date(clip.timestamp).toLocaleTimeString()} · {clip.duration || 10}s
-                        </span>
+            {/* ── Violation Clips (collapsed - only if you need to review) ── */}
+            <details className="group rounded-md border border-line bg-surface">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink hover:bg-canvas [&::-webkit-details-marker]:hidden">
+                <span>Violation Clips ({violationClips.length})</span>
+                <span className="text-xs text-ink-muted group-open:hidden">Show</span>
+                <span className="hidden text-xs text-ink-muted group-open:inline">Hide</span>
+              </summary>
+              <div className="border-t border-line p-4">
+                {violationClips.length > 0 ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {violationClips.map((clip, index) => (
+                      <div key={index} className="overflow-hidden rounded-md border border-line">
+                        <div className="flex items-center justify-between gap-2 bg-canvas px-3 py-2 text-xs">
+                          <span className="truncate font-medium capitalize text-ink">
+                            {clip.eventType ? clip.eventType.replace(/_/g, " ") : "violation"}
+                          </span>
+                          <span className="shrink-0 tabular-nums text-ink-muted">
+                            {new Date(clip.timestamp).toLocaleTimeString()} · {clip.duration || 10}s
+                          </span>
+                        </div>
+                        <Suspense fallback={<div className="aspect-video animate-pulse bg-stone-200" />}>
+                          <VideoPlayer src={clip.url} />
+                        </Suspense>
                       </div>
-                      <Suspense fallback={<div className="aspect-video animate-pulse bg-stone-200" />}>
-                        <VideoPlayer src={clip.url} />
-                      </Suspense>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[13px] italic text-ink-muted">
-                  No violation clips were recorded for this session.
-                </p>
-              )}
-            </section>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[13px] italic text-ink-muted">
+                    No violation clips were recorded for this session.
+                  </p>
+                )}
+              </div>
+            </details>
 
-            {/* ── Review Section ── */}
-            <section>
-              <h3 className="mb-2.5 text-[15px] font-semibold text-ink">Staff Review</h3>
-              <Textarea
-                value={reviewNotes}
-                onChange={(e) => setReviewNotes(e.target.value)}
-                placeholder="Add review notes for this submission…"
-                rows={3}
-              />
+            {/* ── Staff Review (optional, on-demand) ── */}
+            <details className="group rounded-md border border-line bg-surface">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-ink hover:bg-canvas [&::-webkit-details-marker]:hidden">
+                <span>Staff Review &amp; Override</span>
+                <span className="text-xs font-normal text-ink-muted group-open:hidden">Optional - click to override</span>
+                <span className="hidden text-xs font-normal text-ink-muted group-open:inline">Hide</span>
+              </summary>
+              <div className="border-t border-line p-4">
+                <p className="mb-2.5 text-[13px] text-ink-muted">Only open this if you need to override a score or flag/approve. Leave closed otherwise - no action required.</p>
+                <Textarea
+                  value={reviewNotes}
+                  onChange={(e) => setReviewNotes(e.target.value)}
+                  placeholder="Add review notes for this submission…"
+                  rows={3}
+                />
 
-              {selectedSubmission.reviewedBy && (
-                <p className="mt-2 text-[13px] text-ink-muted">
-                  Last reviewed by {selectedSubmission.reviewedBy.name} on{" "}
-                  {new Date(selectedSubmission.reviewedAt).toLocaleString()}
-                </p>
-              )}
+                {selectedSubmission.reviewedBy && (
+                  <p className="mt-2 text-[13px] text-ink-muted">
+                    Last reviewed by {selectedSubmission.reviewedBy.name} on{" "}
+                    {new Date(selectedSubmission.reviewedAt).toLocaleString()}
+                  </p>
+                )}
 
               {/* Lock Info */}
               {selectedSubmission.status === "locked" && (
@@ -845,23 +857,24 @@ const ExamSubmissions = () => {
                 </div>
               )}
 
-              <div className="mt-4 flex flex-wrap gap-2.5 border-t border-line pt-4">
-                <Button
-                  variant="primary"
-                  onClick={() => handleReviewSubmission(false)}
-                  disabled={selectedSubmission.status === "locked"}
-                >
-                  Approve
-                </Button>
-                <Button
-                  variant="dangerGhost"
-                  onClick={() => handleReviewSubmission(true)}
-                  disabled={selectedSubmission.status === "locked"}
-                >
-                  Flag for Review
-                </Button>
+                <div className="mt-4 flex flex-wrap gap-2.5 border-t border-line pt-4">
+                  <Button
+                    variant="primary"
+                    onClick={() => handleReviewSubmission(false)}
+                    disabled={selectedSubmission.status === "locked"}
+                  >
+                    Approve
+                  </Button>
+                  <Button
+                    variant="dangerGhost"
+                    onClick={() => handleReviewSubmission(true)}
+                    disabled={selectedSubmission.status === "locked"}
+                  >
+                    Flag for Review
+                  </Button>
+                </div>
               </div>
-            </section>
+            </details>
           </div>
         )}
       </Modal>
