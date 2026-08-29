@@ -140,6 +140,7 @@ const AdminDashboard = () => {
   const [stats, setStats] = useState(null);
   const [exams, setExams] = useState([]);
   const [reports, setReports] = useState([]);
+  const [selectedReport, setSelectedReport] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // ── Staff state ───────────────────────────────────────────────────────
@@ -546,6 +547,16 @@ const AdminDashboard = () => {
       setReports(reportsData.reports);
     } catch (err) {
       alert("Error generating report: " + err.message);
+    }
+  };
+
+  const handleViewReport = async (reportId) => {
+    try {
+      const authToken = await token();
+      const data = await examService.getReport(authToken, reportId);
+      setSelectedReport(data.report);
+    } catch (err) {
+      alert("Error loading report: " + (err.response?.data?.message || err.message));
     }
   };
 
@@ -1206,6 +1217,7 @@ const AdminDashboard = () => {
             </div>
 
             <h3 className="mb-2.5 mt-7 text-[15px] font-semibold text-ink">Generated Reports</h3>
+            <p className="mb-3 text-[13px] text-ink-muted">Click View to see analytics - no extra page needed.</p>
             {reports.length === 0 ? (
               <div className="rounded-md border border-line bg-surface shadow-sm">
                 <EmptyState
@@ -1226,6 +1238,7 @@ const AdminDashboard = () => {
                     <TH>Date Range</TH>
                     <TH>Generated</TH>
                     <TH>Status</TH>
+                    <TH className="text-right">Action</TH>
                   </TRHead>
                 </THead>
                 <TBody>
@@ -1241,15 +1254,89 @@ const AdminDashboard = () => {
                         {new Date(report.createdAt).toLocaleString()}
                       </TD>
                       <TD>
-                        <Badge variant={report.status === "completed" ? "success" : report.status === "failed" ? "danger" : "warning"}>
+                        <Badge variant={report.status === "failed" ? "danger" : "success"}>
                           {report.status}
                         </Badge>
+                      </TD>
+                      <TD className="text-right">
+                        <Button size="sm" variant="secondary" onClick={() => handleViewReport(report._id)}>View</Button>
                       </TD>
                     </TR>
                   ))}
                 </TBody>
               </Table>
             )}
+            {/* Report detail modal - shows actual analytics */}
+            <Modal open={!!selectedReport} onClose={() => setSelectedReport(null)} size="xl" title={selectedReport ? selectedReport.title || selectedReport.type?.replace(/_/g," ").replace(/\b\w/g,l=>l.toUpperCase()) : ""} subtitle={selectedReport ? `${new Date(selectedReport.startDate).toLocaleDateString()} - ${new Date(selectedReport.endDate).toLocaleDateString()} · ${selectedReport.status}` : ""}>
+              {selectedReport && (
+                <div className="space-y-5">
+                  {/* Exam Analytics */}
+                  {selectedReport.type==="exam_analytics" && selectedReport.data && (
+                    <div className="space-y-4">
+                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.totalExams ?? 0}</dd><dt className="text-xs text-ink-muted">Exams</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.totalSubmissions ?? 0}</dd><dt className="text-xs text-ink-muted">Submissions</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.averageScore ?? 0}%</dd><dt className="text-xs text-ink-muted">Avg Score</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.passRate ?? 0}%</dd><dt className="text-xs text-ink-muted">Pass Rate</dt></div>
+                      </dl>
+                      {Array.isArray(selectedReport.data.examBreakdown) && selectedReport.data.examBreakdown.length>0 && (
+                        <Table>
+                          <THead><TRHead><TH>Exam</TH><TH>Subs</TH><TH>Avg</TH><TH>Pass Rate</TH></TRHead></THead>
+                          <TBody>{selectedReport.data.examBreakdown.map(ex=><TR key={ex.examId}><TD className="max-w-[220px] truncate">{ex.title}</TD><TD className="tabular-nums">{ex.submissions}</TD><TD className="tabular-nums">{ex.averageScore}%</TD><TD className="tabular-nums">{ex.passRate}%</TD></TR>)}</TBody>
+                        </Table>
+                      )}
+                    </div>
+                  )}
+                  {selectedReport.type==="student_performance" && selectedReport.data && (
+                    <div className="space-y-3">
+                      <p className="text-sm text-ink-muted">Total Students with activity: <strong className="text-ink tabular-nums">{selectedReport.data.totalStudents ?? 0}</strong> · Breakdown below (only attempted)</p>
+                      {Array.isArray(selectedReport.data.studentBreakdown) && selectedReport.data.studentBreakdown.length>0 ? (
+                        <Table>
+                          <THead><TRHead><TH>Student</TH><TH>Attempted</TH><TH>Avg Score</TH><TH>Flagged</TH></TRHead></THead>
+                          <TBody>{selectedReport.data.studentBreakdown.slice(0,100).map(s=><TR key={s.studentId}><TD>{s.name}{s.deletedAccount?" (deleted)":""}</TD><TD className="tabular-nums">{s.examsAttempted}</TD><TD className="tabular-nums">{s.averageScore}%</TD><TD className="tabular-nums">{s.flaggedCount}</TD></TR>)}</TBody>
+                        </Table>
+                      ) : <p className="text-sm italic text-ink-muted">No student activity in this range.</p>}
+                      {selectedReport.data.studentBreakdown?.length>100 && <p className="text-xs text-ink-muted">Showing first 100 of {selectedReport.data.studentBreakdown.length}</p>}
+                    </div>
+                  )}
+                  {selectedReport.type==="proctoring_summary" && selectedReport.data && (
+                    <div className="space-y-4">
+                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.totalSessions ?? 0}</dd><dt className="text-xs text-ink-muted">Sessions</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.flaggedSessions ?? 0}</dd><dt className="text-xs text-ink-muted">Flagged</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.averageTrustScore ?? 100}%</dd><dt className="text-xs text-ink-muted">Avg Trust</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.totalEvents ?? 0}</dd><dt className="text-xs text-ink-muted">Events</dt></div>
+                      </dl>
+                      {Array.isArray(selectedReport.data.proctoringBreakdown) && <Table><THead><TRHead><TH>Event</TH><TH>Count</TH></TRHead></THead><TBody>{selectedReport.data.proctoringBreakdown.map(r=><TR key={r.eventType}><TD className="capitalize">{r.eventType.replace(/_/g," ")}</TD><TD className="tabular-nums">{r.count}</TD></TR>)}</TBody></Table>}
+                    </div>
+                  )}
+                  {selectedReport.type==="system_usage" && selectedReport.data && (
+                    <div className="space-y-4">
+                      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.totalSubmissions ?? 0}</dd><dt className="text-xs text-ink-muted">Submissions</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.newUsers ?? 0}</dd><dt className="text-xs text-ink-muted">New Users</dt></div>
+                        <div className="rounded-md border border-line bg-canvas p-3"><dd className="text-xl font-bold tabular-nums">{selectedReport.data.activeUsers ?? 0}</dd><dt className="text-xs text-ink-muted">Active Users</dt></div>
+                      </dl>
+                      {Array.isArray(selectedReport.data.dailyStats) && selectedReport.data.dailyStats.length>0 && (
+                        <Table><THead><TRHead><TH>Date</TH><TH>Subs</TH><TH>New Users</TH><TH>Exams Created</TH></TRHead></THead><TBody>{selectedReport.data.dailyStats.map(d=><TR key={d.date}><TD>{new Date(d.date).toLocaleDateString()}</TD><TD className="tabular-nums">{d.submissions}</TD><TD className="tabular-nums">{d.newUsers}</TD><TD className="tabular-nums">{d.examsCreated}</TD></TR>)}</TBody></Table>
+                      )}
+                    </div>
+                  )}
+                  {selectedReport.type==="flagged_submissions" && selectedReport.data && (
+                    <div className="space-y-3">
+                      <p className="text-sm text-ink-muted">Total Flagged: <strong className="text-ink tabular-nums">{selectedReport.data.totalFlagged ?? 0}</strong></p>
+                      {Array.isArray(selectedReport.data.submissions) && selectedReport.data.submissions.length>0 && (
+                        <Table><THead><TRHead><TH>Student</TH><TH>Exam</TH><TH>Score</TH><TH>Reason</TH></TRHead></THead><TBody>{selectedReport.data.submissions.map(s=><TR key={s.submissionId}><TD>{s.studentName || "Unknown"}</TD><TD className="max-w-[180px] truncate">{s.examTitle}</TD><TD className="tabular-nums">{s.score}%</TD><TD className="max-w-[200px] truncate text-xs">{s.flagReason}</TD></TR>)}</TBody></Table>
+                      )}
+                    </div>
+                  )}
+                  {/* Fallback raw JSON */}
+                  {!["exam_analytics","student_performance","proctoring_summary","system_usage","flagged_submissions"].includes(selectedReport.type) && (
+                    <pre className="max-h-[50vh] overflow-auto rounded-md border border-line bg-canvas p-3 text-xs leading-relaxed">{JSON.stringify(selectedReport.data, null, 2)}</pre>
+                  )}
+                </div>
+              )}
+            </Modal>
           </section>
         )}
       </div>
