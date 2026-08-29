@@ -19,9 +19,9 @@ const PAGE_SIZE = 12;
 const STATUS_VARIANTS = {
   in_progress: { label: "In Progress", variant: "neutral" },
   submitted: { label: "Submitted", variant: "success" },
-  grading: { label: "Pending Review…", variant: "warning" },
-  graded: { label: "Graded", variant: "accent" },
-  partially_graded: { label: "Partially Graded", variant: "warning" },
+  grading: { label: "Submitted", variant: "success" },
+  graded: { label: "Submitted", variant: "success" },
+  partially_graded: { label: "Submitted", variant: "success" },
   locked: { label: "Locked", variant: "danger" },
 };
 
@@ -168,29 +168,10 @@ const MySubmissions = () => {
                         </strong>{" "}
                         — after the exam window closes for everyone.
                       </p>
-                    ) : submission.status === "grading" ? (
-                      <p className="col-span-4 text-[13px] text-ink-muted">
-                        Your submission is awaiting coordinator review.
-                      </p>
-                    ) : submission.status === "partially_graded" ? (
-                      <p className="col-span-4 text-[13px] text-ink-muted">
-                        Base Score: <strong className="text-ink">{submission.score}/{submission.maxScore} ({submission.percentage}%)</strong> — Short answers pending review.
-                      </p>
                     ) : (
-                      <>
-                        <div>
-                          <p className={`text-lg font-bold tabular-nums ${submission.percentage >= 50 ? "text-success" : "text-danger"}`}>
-                            {submission.score}/{submission.maxScore}
-                          </p>
-                          <p className="text-xs text-ink-muted">Score</p>
-                        </div>
-                        <div>
-                          <p className={`text-lg font-bold tabular-nums ${submission.percentage >= 50 ? "text-success" : "text-danger"}`}>
-                            {submission.percentage}%
-                          </p>
-                          <p className="text-xs text-ink-muted">Percent</p>
-                        </div>
-                      </>
+                      <p className="col-span-4 text-[13px] text-ink-muted">
+                        Submitted successfully{submission.submittedAt ? ` on ${new Date(submission.submittedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ""} — awaiting review. Score will appear only if admin overrides.
+                      </p>
                     )}
                     <div>
                       <p className="text-lg font-bold tabular-nums text-ink">{submission.answers?.length || 0}</p>
@@ -241,12 +222,9 @@ const MySubmissions = () => {
                   Results pending — released after the exam window closes
                 </span>
               ) : (
-                (selectedSubmission.status === "graded" ||
-                  selectedSubmission.status === "submitted") && (
-                  <span className={`text-sm font-semibold tabular-nums ${selectedSubmission.percentage >= 50 ? "text-success" : "text-danger"}`}>
-                    {selectedSubmission.score} / {selectedSubmission.maxScore} ({selectedSubmission.percentage}%)
-                  </span>
-                )
+                <span className="text-sm font-medium text-ink-muted">
+                  Submitted — score visible only after admin override
+                </span>
               )}
             </span>
           )
