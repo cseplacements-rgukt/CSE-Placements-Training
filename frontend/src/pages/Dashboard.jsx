@@ -128,8 +128,8 @@ const Dashboard = () => {
   const fetchNotifications = async () => {
     try {
       const token = await getAuthToken();
-      const data = await examService.getNotifications(token);
-      setNotifications(data.notifications?.filter((n) => !n.isRead).slice(0, 5) || []);
+      const data = await examService.getNotifications(token, 1, true);
+      setNotifications(data.notifications?.slice(0, 5) || []);
     } catch (err) {
       console.error("Error fetching notifications:", err);
     }

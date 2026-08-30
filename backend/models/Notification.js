@@ -54,10 +54,24 @@ const notificationSchema = new mongoose.Schema({
   },
   expiresAt: {
     type: Date,
+    default: null,
   },
+});
+
+// Auto-expire: transient exam notifications disappear after 14 days, urgent kept 30.
+// If expiresAt is not set explicitly, set a default based on priority.
+notificationSchema.pre("save", function (next) {
+  if (!this.expiresAt) {
+    const base = this.createdAt || new Date();
+    const days = this.priority === "high" || this.priority === "urgent" ? 30 : 14;
+    this.expiresAt = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+  }
+  next();
 });
 
 // Index for efficient queries
 notificationSchema.index({ userId: 1, isRead: 1, createdAt: -1 });
+// TTL — Mongo deletes the doc when expiresAt passes
+notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model("Notification", notificationSchema);

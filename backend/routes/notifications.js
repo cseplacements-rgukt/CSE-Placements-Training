@@ -12,12 +12,43 @@ router.get("/", verifyFirebaseToken, async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+    const { page = 1, limit = 20, unreadOnly = false, includeExpired = false } = req.query;
 
     const query = { userId: user._id };
     if (unreadOnly === "true") {
       query.isRead = false;
     }
+    // Hide stale notifications for already-attempted exams:
+    // by default only show last 14 days and not-yet-expired. Prevents 5-10 old
+    // exam_submitted rows reappearing on every login.
+    if (includeExpired !== "true") {
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      query.createdAt = { $gte: cutoff };
+      query.$or = [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }];
+      // Merge $or with createdAt without overwriting
+      const or = query.$or;
+      delete query.$or;
+      const createdAtCond = query.createdAt;
+      delete query.createdAt;
+      query.$and = [
+        { createdAt: createdAtCond },
+        { $or: or },
+      ];
+    }
+
+    // Backfill: old docs created before TTL had no expiresAt — set it now so they age out
+    await Notification.updateMany(
+      { userId: user._id, expiresAt: null },
+      [
+        {
+          $set: {
+            expiresAt: {
+              $add: ["$createdAt", 14 * 24 * 60 * 60 * 1000],
+            },
+          },
+        },
+      ],
+    );
 
     const notifications = await Notification.find(query)
       .sort({ createdAt: -1 })
