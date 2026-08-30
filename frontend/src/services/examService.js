@@ -50,6 +50,11 @@ export const examService = {
     return response.data;
   },
 
+  updateEntryDeadline: async (token, examId, payload) => {
+    const response = await api.put(`/exams/${examId}/entry-deadline`, payload, authHeader(token));
+    return response.data;
+  },
+
   unpublishExam: async (token, examId) => {
     const response = await api.put(`/exams/${examId}/unpublish`, {}, authHeader(token));
     return response.data;

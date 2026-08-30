@@ -131,15 +131,16 @@ router.post("/start", verifyFirebaseToken, async (req, res) => {
     if (now < exam.scheduledAt) {
       return res.status(400).json({ message: "Exam has not started yet" });
     }
-    if (now > exam.endTime) {
-      return res.status(400).json({ message: "Exam time has ended" });
-    }
-
-    // Check for existing submission
+    const entryDeadline = exam.entryDeadline || exam.endTime;
+    // Check for existing submission first — resuming is allowed even after entry closes.
     let submission = await Submission.findOne({
       examId,
       studentId: user._id,
     });
+    const isResuming = !!submission;
+    if (!isResuming && entryDeadline && now > entryDeadline) {
+      return res.status(400).json({ code: "ENTRY_CLOSED", message: `Entry to this exam is closed (exam has ended). No new attempts after ${entryDeadline.toISOString()}.` });
+    }
 
     if (submission) {
       // Crash/restart recovery: a submission can be stranded in
@@ -277,13 +278,18 @@ router.post("/", verifyFirebaseToken, submissionLimiter, async (req, res) => {
       return res.status(404).json({ message: "Exam not found" });
     }
 
-    // Check if exam time has ended (with grace period of 5 minutes)
+    // Check if submission window has ended — per attempt deadline, not global window.
+    // A late starter (e.g. 3:05 for a 2hr exam starting at 3:00) gets until startedAt+duration+5min grace,
+    // even if global endTime has passed. Entry closure does not affect already-started attempts.
     const now = new Date();
-    const graceEndTime = new Date(exam.endTime.getTime() + 5 * 60 * 1000);
-    if (now > graceEndTime) {
-      return res
-        .status(400)
-        .json({ message: "Exam submission time has ended" });
+    // We need startedAt to compute individual grace; defer hard check until after we locate submission.
+    // For early-exit when we can estimate: use exam.endTime + duration + grace as upper bound would be too lax,
+    // so we just postpone to after lock. Keep a loose global upper bound to reject absurd late posts:
+    const globalUpperBound = exam.entryDeadline
+      ? new Date(new Date(exam.entryDeadline).getTime() + exam.duration * 60000 + 5 * 60000 + 60 * 1000)
+      : new Date(exam.endTime.getTime() + exam.duration * 60000 + 5 * 60000);
+    if (now > globalUpperBound) {
+      return res.status(400).json({ message: "Exam submission time has ended" });
     }
 
     // ── Minimum-time floor (server authoritative) ────────────

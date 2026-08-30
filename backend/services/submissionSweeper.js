@@ -41,8 +41,12 @@ async function finalizeExpiredSubmissions({ now = new Date() } = {}) {
       const exam = submission.examId;
       if (!exam || !exam.endTime) continue;
 
-      const deadline = new Date(new Date(exam.endTime).getTime() + GLOBAL_GRACE_MS);
-      if (now <= deadline) continue;
+      // Per-attempt deadline: startedAt + duration + grace. This respects
+      // late starters after entry window — they are not swept early.
+      const effectiveDeadline = submission.startedAt && exam.duration
+        ? new Date(new Date(submission.startedAt).getTime() + exam.duration * 60000 + GLOBAL_GRACE_MS)
+        : new Date(new Date(exam.endTime).getTime() + GLOBAL_GRACE_MS);
+      if (now <= effectiveDeadline) continue;
       if (
         submission.status === "processing_submission" &&
         submission.submittedAt &&

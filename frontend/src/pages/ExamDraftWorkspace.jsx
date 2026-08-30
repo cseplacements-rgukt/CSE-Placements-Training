@@ -481,8 +481,10 @@ const ExamDraftWorkspace = () => {
   const [review, setReview] = useState(null);
   const [publishAt, setPublishAt] = useState("");
   const [publishDuration, setPublishDuration] = useState(60);
+  const [publishEntryWindow, setPublishEntryWindow] = useState(30);
   const [publishing, setPublishing] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
+  const [closingEntry, setClosingEntry] = useState(false);
   const [flash, setFlash] = useState(null); // {kind:'success'|'error', text}
 
   const editingLocallyRef = useRef(false);
@@ -842,6 +844,7 @@ const ExamDraftWorkspace = () => {
       const res = await examService.publishExam(token, examId, {
         scheduledAt: when.toISOString(),
         duration: Number(publishDuration),
+        entryWindowMinutes: Number(publishEntryWindow),
       });
       setExam(res.exam);
       flashMsg("success", `Published! Share this exam code with students: ${res.exam.examCode}`);
@@ -851,6 +854,21 @@ const ExamDraftWorkspace = () => {
       flashMsg("error", errs ? errs.join(" ") : err.response?.data?.message || "Publish failed.");
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleCloseEntry = async () => {
+    if (!window.confirm("Close entry now? No new students can start after this. Those already writing continue for their full duration.")) return;
+    try {
+      setClosingEntry(true);
+      const token = await getAuthToken();
+      const res = await examService.updateEntryDeadline(token, examId, {});
+      setExam(res.exam);
+      flashMsg("success", res.message);
+    } catch (err) {
+      flashMsg("error", err.response?.data?.message || "Failed to close entry.");
+    } finally {
+      setClosingEntry(false);
     }
   };
 
@@ -1434,7 +1452,7 @@ const ExamDraftWorkspace = () => {
                     </CardHeader>
                     <CardBody className="pt-0">
                       {exam.status === "published" ? (
-                        <div className="space-y-2 text-sm text-ink-muted">
+                        <div className="space-y-3 text-sm text-ink-muted">
                           <p className="text-ink">
                             Live. Students join with code{" "}
                             <strong className="rounded-sm bg-canvas px-2 py-0.5 font-mono tracking-wider text-ink ring-1 ring-inset ring-line">
@@ -1444,15 +1462,36 @@ const ExamDraftWorkspace = () => {
                           <p className="text-[13px]">
                             Window: {exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleString() : "—"} · {exam.duration} min
                           </p>
-                          <p className="text-[13px]">Manage closing/unpublishing from the dashboard.</p>
+                          <p className="text-[13px]">
+                            Entry closes:{" "}
+                            <strong className="text-ink">
+                              {exam.entryDeadline ? new Date(exam.entryDeadline).toLocaleString() : new Date(exam.endTime).toLocaleString()}
+                            </strong>
+                            {" · "}
+                            {exam.entryDeadline && new Date(exam.entryDeadline) <= new Date() ? (
+                              <span className="font-medium text-danger">Entry closed — no new starts. Ongoing attempts continue for their full duration.</span>
+                            ) : (
+                              <span>no new starts after this. Those already writing continue.</span>
+                            )}
+                          </p>
+                          <div className="flex gap-2">
+                            {exam.entryDeadline && new Date(exam.entryDeadline) > new Date() ? (
+                              <Button size="sm" variant="secondary" disabled={closingEntry} onClick={handleCloseEntry}>
+                                {closingEntry ? "Closing…" : "Close Entry Now"}
+                              </Button>
+                            ) : (
+                              <Badge variant="neutral">Entry Closed</Badge>
+                            )}
+                            <span className="text-[13px] self-center">Manage closing/unpublishing from the dashboard.</span>
+                          </div>
                         </div>
                       ) : isEditable ? (
                         <>
                           <p className="text-[13px] leading-relaxed text-ink-muted">
                             Publishing generates the student join code. Set the schedule now — this is the
-                            step where date &amp; duration become mandatory.
+                            step where date &amp; duration become mandatory. Entry window controls how long after opening students may still start (those already started always get their full {publishDuration} min).
                           </p>
-                          <div className="mt-4 grid max-w-xl gap-4 sm:grid-cols-2">
+                          <div className="mt-4 grid max-w-xl gap-4 sm:grid-cols-3">
                             <Input
                               label="Exam Opens At *"
                               type="datetime-local"
@@ -1468,7 +1507,19 @@ const ExamDraftWorkspace = () => {
                               onChange={(e) => setPublishDuration(parseInt(e.target.value) || 0)}
                               required
                             />
+                            <Input
+                              label="Entry open for (min) *"
+                              type="number"
+                              min="0"
+                              title="0 = close immediately, 30 = students can start up to 30 min after opening. Ongoing attempts always run their full duration."
+                              value={publishEntryWindow}
+                              onChange={(e) => setPublishEntryWindow(parseInt(e.target.value) || 0)}
+                              required
+                            />
                           </div>
+                          <p className="mt-2 text-xs text-ink-muted">
+                            Example: Opens 3:00, duration 120 min, entry open 30 min → no one can start after 3:30; those who started at 3:25 still write till 5:25. Set to {publishDuration} to mimic old behaviour (entry = window end).
+                          </p>
                           {questions.length === 0 && (
                             <Alert variant="error" className="mt-4 max-w-xl">
                               Add at least one question before publishing.

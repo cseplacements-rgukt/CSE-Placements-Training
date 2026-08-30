@@ -245,7 +245,7 @@ router.put("/:id", verifyFirebaseToken, async (req, res) => {
 
     const {
       title, description, targetCompany, examCategory, instructions,
-      scheduledAt, duration, isActive, settings,
+      scheduledAt, duration, entryDeadline, entryWindowMinutes, isActive, settings,
     } = req.body;
 
     if (title) exam.title = title;
@@ -260,11 +260,33 @@ router.put("/:id", verifyFirebaseToken, async (req, res) => {
       } else if (exam.duration) {
         exam.endTime = new Date(exam.scheduledAt.getTime() + exam.duration * 60000);
       }
+      // Keep entryDeadline consistent when scheduledAt moves but no explicit entryDeadline given
+      if (!entryDeadline && entryWindowMinutes === undefined && !exam.entryDeadline) {
+        // will be defaulted on next publish/save; nothing to do
+      }
     }
     if (duration) {
       exam.duration = duration;
       const base = exam.scheduledAt ? new Date(exam.scheduledAt) : new Date();
       exam.endTime = new Date(base.getTime() + duration * 60000);
+    }
+    // Explicit entryDeadline handling (absolute) or window (minutes from scheduledAt)
+    if (entryDeadline !== undefined) {
+      exam.entryDeadline = entryDeadline ? new Date(entryDeadline) : null;
+    } else if (entryWindowMinutes !== undefined) {
+      const win = Number(entryWindowMinutes);
+      if (!isNaN(win) && exam.scheduledAt) {
+        if (win <= 0) {
+          // 0 means close immediately after publish - no new entries
+          exam.entryDeadline = new Date(exam.scheduledAt);
+        } else {
+          exam.entryDeadline = new Date(new Date(exam.scheduledAt).getTime() + win * 60000);
+        }
+      }
+    }
+    // When endTime changes and no explicit entryDeadline yet, keep them in sync for legacy
+    if (exam.endTime && !exam.entryDeadline) {
+      exam.entryDeadline = new Date(exam.endTime);
     }
     if (isActive !== undefined) exam.isActive = isActive;
     if (settings) exam.settings = { ...exam.settings, ...settings };
@@ -596,7 +618,7 @@ router.put("/:id/publish", verifyFirebaseToken, async (req, res) => {
     }
 
     // Apply timing provided at publish time
-    const { scheduledAt, duration } = req.body || {};
+    const { scheduledAt, duration, entryDeadline, entryWindowMinutes } = req.body || {};
     if (scheduledAt) exam.scheduledAt = new Date(scheduledAt);
     if (duration) exam.duration = Number(duration);
 
@@ -609,6 +631,24 @@ router.put("/:id/publish", verifyFirebaseToken, async (req, res) => {
     // Derive endTime from the (possibly just-updated) schedule
     if (exam.scheduledAt && exam.duration) {
       exam.endTime = new Date(new Date(exam.scheduledAt).getTime() + exam.duration * 60000);
+    }
+
+    // Entry deadline: explicit timestamp, or window (minutes from scheduledAt), or default to endTime.
+    if (entryDeadline) {
+      exam.entryDeadline = new Date(entryDeadline);
+    } else if (entryWindowMinutes !== undefined && entryWindowMinutes !== null && entryWindowMinutes !== "") {
+      const win = Number(entryWindowMinutes);
+      if (!isNaN(win) && exam.scheduledAt) {
+        if (win === 0) {
+          // Single-shot exam: entry closes at scheduled start
+          exam.entryDeadline = new Date(exam.scheduledAt);
+        } else if (win > 0) {
+          exam.entryDeadline = new Date(new Date(exam.scheduledAt).getTime() + win * 60000);
+        }
+      }
+    }
+    if (!exam.entryDeadline && exam.endTime) {
+      exam.entryDeadline = new Date(exam.endTime);
     }
 
     // Prevent publishing an exam whose window has already passed — students
@@ -707,12 +747,61 @@ router.put("/:id/close", verifyFirebaseToken, async (req, res) => {
     }
 
     exam.status = "closed";
-    exam.endTime = new Date();
+    const nowClose = new Date();
+    exam.endTime = nowClose;
+    exam.entryDeadline = nowClose;
     await exam.save();
 
     res.json({ exam, message: "Exam closed successfully" });
   } catch (error) {
     console.error("Error closing exam:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+// Update entry deadline for a published exam (close/open entry without ending ongoing attempts)
+router.put("/:id/entry-deadline", verifyFirebaseToken, async (req, res) => {
+  try {
+    const user = await User.findOne({ firebaseUid: req.user.uid });
+    if (!user || !["coordinator", "admin", "super_admin"].includes(user.role)) {
+      return res.status(403).json({ message: "Only training-team staff can change entry deadline" });
+    }
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ message: "Exam not found" });
+    const isAdminRole = ["admin", "super_admin"].includes(user.role);
+    const isCreator = exam.teacherId && exam.teacherId.toString() === user._id.toString();
+    if (!isAdminRole && !isCreator) {
+      return res.status(403).json({ message: "Only the exam creator can change entry deadline" });
+    }
+    if (exam.status !== "published") {
+      return res.status(400).json({ message: "Entry deadline can only be changed for published exams" });
+    }
+    const { entryDeadline, entryWindowMinutes } = req.body || {};
+    if (entryDeadline !== undefined) {
+      if (entryDeadline === null || entryDeadline === "") {
+        exam.entryDeadline = exam.endTime;
+      } else {
+        const d = new Date(entryDeadline);
+        if (isNaN(d.getTime())) return res.status(400).json({ message: "Invalid entryDeadline" });
+        if (d < exam.scheduledAt) return res.status(400).json({ message: "Entry deadline cannot be before exam start" });
+        exam.entryDeadline = d;
+      }
+    } else if (entryWindowMinutes !== undefined) {
+      const win = Number(entryWindowMinutes);
+      if (isNaN(win) || win < 0) return res.status(400).json({ message: "entryWindowMinutes must be >= 0" });
+      if (win === 0) {
+        exam.entryDeadline = new Date(); // close immediately
+      } else {
+        exam.entryDeadline = new Date(new Date(exam.scheduledAt).getTime() + win * 60000);
+      }
+    } else {
+      // No param: close entry now (immediate)
+      exam.entryDeadline = new Date();
+    }
+    await exam.save();
+    res.json({ exam, message: `Entry ${exam.entryDeadline <= new Date() ? "closed" : "updated"} — no new starts after ${formatExamDateTime(exam.entryDeadline)}. Ongoing attempts continue for their full duration.` });
+  } catch (error) {
+    console.error("Error updating entry deadline:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });
@@ -840,12 +929,23 @@ router.post("/join", verifyFirebaseToken, examCodeLimiter, async (req, res) => {
     }
 
     // Check exam time window with distinct, actionable messages
+    // entryDeadline controls whether NEW starts are allowed; existing attempts
+    // continue until startedAt + duration (handled in /submissions/start).
     const now = new Date();
     if (now < exam.scheduledAt) {
       // Joining early is allowed so students can preview details,
       // but the response flags it as upcoming.
     }
+    const entryDeadline = exam.entryDeadline || exam.endTime;
+    if (entryDeadline && now > entryDeadline) {
+      return res.status(400).json({
+        code: "ENTRY_CLOSED",
+        message: `Entry to this exam is closed. No new attempts can be started after ${formatExamDateTime(entryDeadline)}. If you already started, resume from My Submissions.`,
+      });
+    }
     if (now > exam.endTime) {
+      // Legacy fallback: if entryDeadline was not set, endTime is the hard stop.
+      // With entryDeadline present this is redundant but keeps old clients clear.
       return res.status(400).json({
         code: "EXAM_ENDED",
         message: `This exam is no longer available. It ended on ${formatExamDateTime(exam.endTime)}.`,
@@ -874,6 +974,7 @@ router.post("/join", verifyFirebaseToken, examCodeLimiter, async (req, res) => {
       duration: exam.duration,
       scheduledAt: exam.scheduledAt,
       endTime: exam.endTime,
+      entryDeadline: exam.entryDeadline || exam.endTime,
       questionCount: exam.questions.length,
       settings: {
         requireWebcam: exam.settings?.requireWebcam,

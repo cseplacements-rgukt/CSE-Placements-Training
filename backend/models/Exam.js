@@ -196,6 +196,13 @@ const examSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  // Entry window: no NEW attempt may be started after this instant.
+  // Existing in_progress attempts continue until startedAt + duration.
+  // For published exams where this is null (legacy), entryDeadline == endTime.
+  entryDeadline: {
+    type: Date,
+    default: null,
+  },
   isActive: {
     type: Boolean,
     default: false, // Legacy compatibility, will be derived from status
@@ -358,6 +365,13 @@ examSchema.pre("validate", function (next) {
       return next(
         new Error("Scheduled time, duration, and end time are required once an exam is published.")
       );
+    }
+    // Back-compat: legacy published exams without entryDeadline default to endTime.
+    if (!this.entryDeadline) {
+      this.entryDeadline = this.endTime;
+    }
+    if (this.entryDeadline < this.scheduledAt) {
+      return next(new Error("Entry deadline cannot be before the exam start time."));
     }
   }
   // The minimum-time floor must always be reachable inside the exam window;

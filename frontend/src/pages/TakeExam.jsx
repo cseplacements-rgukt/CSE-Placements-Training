@@ -538,12 +538,12 @@ const TakeExam = () => {
       const activeExam = normalizeExamQuestions(submissionData.exam) || exam;
 
       // ── Timer calculation (Server Authoritative) ──
-      // Sync clock first so endAt comparison uses server time, not a drifted laptop.
+      // Per-attempt deadline: startedAt + duration. Entry deadline only gates NEW starts;
+      // ongoing attempts run their full duration even if global endTime has passed.
       await syncServerClock();
       const startedAt = new Date(submissionData.submission.startedAt);
       const individualEndTime = new Date(startedAt.getTime() + activeExam.duration * 60000);
-      const globalEndTime = new Date(activeExam.endTime);
-      const finalEndTime = individualEndTime < globalEndTime ? individualEndTime : globalEndTime;
+      const finalEndTime = individualEndTime;
 
       setExamEndAt(finalEndTime.getTime());
 
