@@ -68,12 +68,11 @@ function gateResultsForStudent(submissionObj, exam) {
 // Attaches percentile, rank and totalParticipants to each non-pending
 // submission. Percentile = % of participants scoring strictly below you
 // (0 = lowest, 100 = highest). Rank = 1 is the top scorer.
-// Hidden when gated by resultsPending or showResultsImmediately === false.
+// Only hidden when gated by resultsPending (window still open).
 async function attachPercentiles(cleanSubmissions) {
   const groups = {};
   for (const s of cleanSubmissions) {
     if (s.resultsPending) continue;
-    if (s.examId?.settings?.showResultsImmediately === false) continue;
     const eid = String(s.examId?._id || s.examId || "");
     if (!eid || eid === "undefined") continue;
     if (!groups[eid]) groups[eid] = [];
@@ -112,7 +111,6 @@ async function attachPercentiles(cleanSubmissions) {
 
 async function attachPercentileSingle(submissionObj, exam) {
   if (!submissionObj || submissionObj.resultsPending) return;
-  if (exam?.settings?.showResultsImmediately === false) return;
   const eid = String(exam?._id || submissionObj.examId?._id || submissionObj.examId || "");
   if (!eid || eid === "undefined") return;
   const all = await Submission.find({
@@ -733,15 +731,8 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
         gateResultsForStudent(cleaned, s.examId);
 
         // Strip correct answers if teacher disabled immediate results
+        // (scores/percentile stay visible after release)
         if (s.examId?.settings?.showResultsImmediately === false) {
-          cleaned.score = 0;
-          cleaned.percentage = 0;
-          cleaned.answers = cleaned.answers?.map((a) => ({
-            ...a,
-            isCorrect: undefined,
-            marksAwarded: undefined,
-            slmScore: undefined,
-          }));
           cleaned.examId = {
             ...s.examId,
             questions: s.examId.questions?.map((q) => ({
@@ -799,19 +790,11 @@ router.get("/:id", verifyFirebaseToken, async (req, res) => {
     }
 
     // Sanitize for students: hide scores until release, then strip correct
-    // answers if showResultsImmediately is false
+    // answers if showResultsImmediately is false (scores stay visible)
     if (user.role === "student") {
       const submissionObj = submission.toObject();
       gateResultsForStudent(submissionObj, submissionObj.examId);
       if (submissionObj.examId?.settings?.showResultsImmediately === false) {
-        submissionObj.score = 0;
-        submissionObj.percentage = 0;
-        submissionObj.answers = submissionObj.answers?.map(a => ({
-          ...a,
-          isCorrect: undefined,
-          marksAwarded: undefined,
-          slmScore: undefined
-        }));
         submissionObj.examId.questions = submissionObj.examId.questions?.map((q) => ({
           ...q,
           correctAnswer: undefined,
