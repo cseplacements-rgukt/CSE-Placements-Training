@@ -64,6 +64,74 @@ function gateResultsForStudent(submissionObj, exam) {
   return submissionObj;
 }
 
+// ── Percentile / Rank helpers ────────────────────────────────────────────
+// Attaches percentile, rank and totalParticipants to each non-pending
+// submission. Percentile = % of participants scoring strictly below you
+// (0 = lowest, 100 = highest). Rank = 1 is the top scorer.
+// Hidden when gated by resultsPending or showResultsImmediately === false.
+async function attachPercentiles(cleanSubmissions) {
+  const groups = {};
+  for (const s of cleanSubmissions) {
+    if (s.resultsPending) continue;
+    if (s.examId?.settings?.showResultsImmediately === false) continue;
+    const eid = String(s.examId?._id || s.examId || "");
+    if (!eid || eid === "undefined") continue;
+    if (!groups[eid]) groups[eid] = [];
+    groups[eid].push(s);
+  }
+  const examIds = Object.keys(groups);
+  if (examIds.length === 0) return;
+  // Fetch all scored submissions per exam in parallel
+  await Promise.all(
+    examIds.map(async (eid) => {
+      const all = await Submission.find({
+        examId: eid,
+        status: { $in: ["submitted", "grading", "graded", "partially_graded", "locked"] },
+      })
+        .select("percentage")
+        .lean();
+      const total = all.length;
+      if (total === 0) return;
+      const sorted = all.map((a) => (isNaN(a.percentage) ? 0 : a.percentage)).sort((a, b) => a - b);
+      for (const sub of groups[eid]) {
+        const pct = isNaN(sub.percentage) ? 0 : sub.percentage;
+        const below = sorted.filter((p) => p < pct).length;
+        const above = sorted.filter((p) => p > pct).length;
+        const rank = above + 1;
+        let percentile;
+        if (total === 1) percentile = 100;
+        else percentile = Math.round((below / (total - 1)) * 100);
+        percentile = Math.max(0, Math.min(100, percentile));
+        sub.percentile = percentile;
+        sub.rank = rank;
+        sub.totalParticipants = total;
+      }
+    })
+  );
+}
+
+async function attachPercentileSingle(submissionObj, exam) {
+  if (!submissionObj || submissionObj.resultsPending) return;
+  if (exam?.settings?.showResultsImmediately === false) return;
+  const eid = String(exam?._id || submissionObj.examId?._id || submissionObj.examId || "");
+  if (!eid || eid === "undefined") return;
+  const all = await Submission.find({
+    examId: eid,
+    status: { $in: ["submitted", "grading", "graded", "partially_graded", "locked"] },
+  })
+    .select("percentage")
+    .lean();
+  const total = all.length;
+  if (total === 0) return;
+  const sorted = all.map((a) => (isNaN(a.percentage) ? 0 : a.percentage)).sort((a, b) => a - b);
+  const pct = isNaN(submissionObj.percentage) ? 0 : submissionObj.percentage;
+  const below = sorted.filter((p) => p < pct).length;
+  const above = sorted.filter((p) => p > pct).length;
+  submissionObj.percentile = total === 1 ? 100 : Math.max(0, Math.min(100, Math.round((below / (total - 1)) * 100)));
+  submissionObj.rank = above + 1;
+  submissionObj.totalParticipants = total;
+}
+
 // ── Deterministic per-submission shuffle ────────────────────────────────────
 // Seeded Fisher-Yates: the same submission always gets the SAME order (page
 // reloads stay consistent) while different students get different orders.
@@ -666,6 +734,14 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
 
         // Strip correct answers if teacher disabled immediate results
         if (s.examId?.settings?.showResultsImmediately === false) {
+          cleaned.score = 0;
+          cleaned.percentage = 0;
+          cleaned.answers = cleaned.answers?.map((a) => ({
+            ...a,
+            isCorrect: undefined,
+            marksAwarded: undefined,
+            slmScore: undefined,
+          }));
           cleaned.examId = {
             ...s.examId,
             questions: s.examId.questions?.map((q) => ({
@@ -679,6 +755,8 @@ router.get("/my-submissions", verifyFirebaseToken, async (req, res) => {
 
         return cleaned;
       });
+
+    await attachPercentiles(cleanSubmissions);
 
     res.json({ submissions: cleanSubmissions });
   } catch (error) {
@@ -741,6 +819,8 @@ router.get("/:id", verifyFirebaseToken, async (req, res) => {
           explanation: undefined,
         }));
       }
+      // Attach percentile/rank if results are released
+      await attachPercentileSingle(submissionObj, submissionObj.examId);
       // Strip proctoring data from student view — they shouldn't see their own events
       delete submissionObj.proctoringEvents;
       delete submissionObj.webcamSnapshots;
