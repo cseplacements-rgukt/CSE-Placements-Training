@@ -8,10 +8,17 @@ const api = axios.create({
   timeout: 30000,
 });
 
-// Helper to set auth header
-const authHeader = (token) => ({
-  headers: { Authorization: `Bearer ${token}` },
-});
+// Helper to set auth header - guards against "Bearer null/undefined" which
+// would otherwise flood backend logs with "no kid claim" errors.
+const authHeader = (token) => {
+  if (!token || token === "null" || token === "undefined") {
+    // No valid token - let caller decide; don't send a bogus header.
+    // Throwing early makes the missing-auth bug visible in devtools instead
+    // of silently hitting the server as an invalid token.
+    throw new Error("No auth token available - please sign in again.");
+  }
+  return { headers: { Authorization: `Bearer ${token}` } };
+};
 
 export const examService = {
   // ─── Exam CRUD ──────────────────────────────────────────────────────────────

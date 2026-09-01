@@ -7,6 +7,16 @@ const connectDB = require("./config/db");
 
 dotenv.config();
 
+// Fail fast in production if student JWT secret is missing - otherwise the
+// ephemeral fallback would silently invalidate all student sessions on every
+// restart and the logs would flood with "no kid claim" as every roster JWT
+// fails its HS256 check and falls through to Firebase.
+if (process.env.NODE_ENV === "production" && !process.env.STUDENT_JWT_SECRET) {
+  console.error("FATAL: STUDENT_JWT_SECRET is not set in production. Refusing to start with ephemeral secret.");
+  console.error("Generate one: node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"");
+  process.exit(1);
+}
+
 const app = express();
 
 // Behind Nginx on the Hostinger VPS, Express must read the real client IP

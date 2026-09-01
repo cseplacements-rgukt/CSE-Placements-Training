@@ -2,9 +2,12 @@ import axios from "axios";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
-const authHeader = (token) => ({
-  headers: { Authorization: `Bearer ${token}` },
-});
+const authHeader = (token) => {
+  if (!token || token === "null" || token === "undefined") {
+    throw new Error("No auth token available - please sign in again.");
+  }
+  return { headers: { Authorization: `Bearer ${token}` } };
+};
 
 // Staff account provisioning + student roster management.
 // Backend routes: /api/staff and /api/students (admin/super_admin only).

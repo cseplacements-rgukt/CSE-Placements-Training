@@ -55,6 +55,18 @@ const verifyAuth = async (req, res, next) => {
     return res.status(401).json({ message: "No token provided" });
   }
 
+  // Reject obviously malformed values before touching any verifier.
+  // Frontend race-conditions can send literal "null"/"undefined" strings
+  // when getAuthToken() hasn't resolved yet - those must not reach
+  // Firebase's verifyIdToken (which would log "no kid claim" noise).
+  if (
+    token === "null" ||
+    token === "undefined" ||
+    token.trim() === ""
+  ) {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+
   // 1) Backend-issued roster-student token.
   try {
     const payload = jwt.verify(token, JWT_SECRET);
@@ -68,8 +80,17 @@ const verifyAuth = async (req, res, next) => {
       };
       return next();
     }
+    // Valid JWT but not a roster token - don't fall through silently,
+    // continue to Firebase path (e.g. a future HS256 staff token).
   } catch (jwtError) {
-    // Not a valid roster token — fall through to Firebase verification.
+    // TokenExpiredError means it WAS a roster token but session elapsed.
+    // Returning here avoids the noisy Firebase "no kid claim" fallback.
+    if (jwtError?.name === "TokenExpiredError") {
+      return res.status(401).json({ message: "Session expired. Please sign in again." });
+    }
+    // For any other jwt error (invalid signature, malformed) fall
+    // through to Firebase verification - the token might be a Firebase
+    // ID token instead. Intentionally no log here; this is expected.
   }
 
   // 2) Firebase ID token (staff accounts).
@@ -81,7 +102,18 @@ const verifyAuth = async (req, res, next) => {
     req.user = decodedToken;
     next();
   } catch (error) {
-    console.error("Error verifying token:", error?.message || error);
+    // Firebase's "no kid claim" is expected when a roster JWT or garbage
+    // reaches this branch. Log at debug level only to avoid flooding
+    // production logs during mass expiry / polling bursts. The client
+    // already gets a 401/403; no stack needed.
+    const msg = error?.message || String(error);
+    const isKidError = msg.includes('kid');
+    if (!isKidError) {
+      // Genuine Firebase failure (bad projectId, revoked token) - keep visible
+      console.warn("Firebase token verification failed:", msg);
+    } else if (process.env.NODE_ENV !== "production") {
+      console.debug("Firebase verify fallback missed (expected for roster/garbage token):", msg);
+    }
     return res.status(403).json({ message: "Invalid token" });
   }
 };

@@ -20,9 +20,11 @@ export const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   // Students have no Firebase identity — their session is a backend JWT.
-  const [studentToken, setStudentToken] = useState(
-    () => localStorage.getItem(STUDENT_TOKEN_KEY) || null,
-  );
+  const [studentToken, setStudentToken] = useState(() => {
+    const raw = localStorage.getItem(STUDENT_TOKEN_KEY);
+    if (!raw || raw === "null" || raw === "undefined") return null;
+    return raw;
+  });
   const [loading, setLoading] = useState(true);
   const authActionRef = React.useRef(false);
 
@@ -156,11 +158,20 @@ export const AuthProvider = ({ children }) => {
   };
 
   const getAuthToken = async () => {
-    if (studentToken) {
+    if (studentToken && studentToken !== "null" && studentToken !== "undefined") {
       return studentToken;
     }
     if (currentUser) {
-      return await currentUser.getIdToken();
+      try {
+        return await currentUser.getIdToken();
+      } catch {
+        // Token refresh can transiently fail (network); force-refresh once
+        try {
+          return await currentUser.getIdToken(true);
+        } catch {
+          return null;
+        }
+      }
     }
     return null;
   };
