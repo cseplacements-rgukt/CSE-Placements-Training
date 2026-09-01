@@ -128,6 +128,12 @@ export const examService = {
     return response.data;
   },
 
+  // Bulk fix: correctAnswer was wrong → update key and regrade ALL submissions
+  fixAnswerKey: async (token, examId, questionId, correctAnswer) => {
+    const response = await api.put(`/exams/${examId}/questions/${questionId}/correct-answer`, { correctAnswer }, authHeader(token));
+    return response.data;
+  },
+
   // ─── Self-service password change (staff + roster students) ────────────────
   changePassword: async (token, { currentPassword, newPassword }) => {
     const response = await api.put("/auth/change-password", { currentPassword, newPassword }, authHeader(token));

@@ -95,10 +95,101 @@ async function regradeSubmission(submissionId) {
   return { totalScore, hasPendingReview };
 }
 
+/**
+ * Bulk fix the correct answer for one question and regrade ALL submissions.
+ * Updates exam.questions[].correctAnswer and recomputes score/percentage/status
+ * for every non-in-progress submission. Also refreshes exam percentageSum/averageScore.
+ *
+ * Returns { affected, totalSubmissions }.
+ */
+async function fixAnswerKeyAndRegrade(examId, questionId, newCorrectAnswer) {
+  const exam = await Exam.findById(examId);
+  if (!exam) throw new Error(`Exam ${examId} not found`);
+  const question = exam.questions.id(questionId);
+  if (!question) throw new Error(`Question ${questionId} not found in exam`);
+
+  // Persist new answer key
+  question.correctAnswer = String(newCorrectAnswer).trim();
+  // Keep modelAnswer in sync if it was mirroring the old key (optional)
+  exam.updatedAt = new Date();
+  await exam.save();
+
+  const points = question.points || 1;
+  const submissions = await Submission.find({ examId });
+
+  let affected = 0;
+  for (const sub of submissions) {
+    // In-progress attempts will be graded at submit time with the new key; skip.
+    if (["in_progress", "processing_submission"].includes(sub.status)) continue;
+    const ans = (sub.answers || []).find((a) => String(a.questionId) === String(questionId));
+    if (!ans) continue;
+
+    const isCorrect = normalizeText(ans.answer) === normalizeText(newCorrectAnswer);
+    const newMarks = isCorrect ? points : 0;
+
+    // Always overwrite to enforce the new key for everyone (including prior manual overrides)
+    const needsUpdate =
+      ans.isCorrect !== isCorrect ||
+      ans.marksAwarded !== newMarks ||
+      ans.gradingStatus !== "graded" ||
+      ans.gradingMethod !== "exact_match";
+
+    if (!needsUpdate) continue;
+
+    ans.isCorrect = isCorrect;
+    ans.marksAwarded = newMarks;
+    ans.gradingStatus = "graded";
+    ans.gradingMethod = "exact_match";
+    ans.updatedAt = new Date();
+
+    // Recalc total
+    let total = 0;
+    for (const a of sub.answers) total += a.marksAwarded || 0;
+    sub.score = total;
+    if (sub.maxScore > 0) sub.percentage = Math.round((total / sub.maxScore) * 100);
+    else sub.percentage = 0;
+
+    const hasPending = (sub.answers || []).some(
+      (a) => a.gradingStatus === "pending_review" || a.gradingStatus === "ungraded"
+    );
+    if (hasPending) {
+      sub.status = "partially_graded";
+      sub.gradingCompletedAt = undefined;
+    } else {
+      sub.status = "graded";
+      sub.gradingCompletedAt = new Date();
+    }
+    await sub.save();
+    affected++;
+  }
+
+  // Refresh exam aggregates
+  const scored = await Submission.find({
+    examId,
+    status: { $in: ["submitted", "grading", "graded", "partially_graded", "locked"] },
+  })
+    .select("percentage")
+    .lean();
+  if (scored.length > 0) {
+    const sum = scored.reduce((s, a) => s + (isNaN(a.percentage) ? 0 : a.percentage), 0);
+    const avg = Math.round(sum / scored.length);
+    await Exam.findByIdAndUpdate(examId, {
+      percentageSum: sum,
+      averageScore: avg,
+      totalSubmissions: scored.length,
+    });
+  } else {
+    await Exam.findByIdAndUpdate(examId, { percentageSum: 0, averageScore: 0 });
+  }
+
+  return { affected, totalSubmissions: submissions.length };
+}
+
 module.exports = {
   gradeMCQ,
   gradeFillBlank,
   EXACT_MATCH_TYPES,
   MANUAL_REVIEW_TYPES,
   regradeSubmission,
+  fixAnswerKeyAndRegrade,
 };

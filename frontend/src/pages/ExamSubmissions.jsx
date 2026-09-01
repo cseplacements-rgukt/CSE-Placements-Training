@@ -156,6 +156,11 @@ const ExamSubmissions = () => {
   const [editTotalMarks, setEditTotalMarks] = useState("");
   const [totalOverrideReason, setTotalOverrideReason] = useState("");
 
+  // Answer-key bulk fix state (good styling panel)
+  const [fixDrafts, setFixDrafts] = useState({}); // { [questionId]: newCorrectAnswer }
+  const [fixLoadingId, setFixLoadingId] = useState(null);
+  const [lastFixResult, setLastFixResult] = useState(null);
+
   // Toast notification
   const [toast, setToast] = useState(null);
 
@@ -356,6 +361,41 @@ const ExamSubmissions = () => {
   };
 
 
+  // ── Bulk answer-key correction ───────────────────────────────
+  const handleFixAnswerKey = async (questionId) => {
+    const newVal = fixDrafts[questionId];
+    if (!newVal || !String(newVal).trim()) {
+      showToast("Select a correct option first", "error");
+      return;
+    }
+    const q = exam?.questions?.find((qq) => String(qq._id) === String(questionId));
+    if (q && String(q.correctAnswer) === String(newVal).trim()) {
+      showToast("That is already the current answer key", "error");
+      return;
+    }
+    if (!window.confirm(`Change correct answer to "${newVal}" and regrade ALL submissions for this question? This updates everyone’s score.`)) return;
+    setFixLoadingId(questionId);
+    try {
+      const token = await getAuthToken();
+      const res = await examService.fixAnswerKey(token, examId, questionId, String(newVal).trim());
+      showToast(res.message || `Regraded ${res.affected} submission(s)`, "success");
+      setLastFixResult({ questionId, affected: res.affected, at: new Date().toLocaleTimeString(), value: newVal });
+      // refresh exam + submissions
+      const [examData, submissionsData] = await Promise.all([
+        examService.getExam(token, examId),
+        examService.getSubmissions(token, examId),
+      ]);
+      setExam(examData.exam);
+      setSubmissions(submissionsData.submissions);
+      setStats(submissionsData.stats);
+      if (selectedSubmission) await refreshSubmissionDetail(selectedSubmission._id);
+    } catch (error) {
+      showToast(error.response?.data?.message || error.message, "error");
+    } finally {
+      setFixLoadingId(null);
+    }
+  };
+
   // ── Helpers ────────────────────────────────────────────────────
   const filteredSubmissions = useMemo(
     () =>
@@ -429,6 +469,100 @@ const ExamSubmissions = () => {
             </div>
           ))}
         </dl>
+      )}
+
+      {/* ── Answer Key Correction — polished bulk fix ── */}
+      {exam?.questions?.length > 0 && (
+        <details className="group mt-6 overflow-hidden rounded-md border border-amber-200 bg-amber-50/70 shadow-sm" open>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 bg-gradient-to-r from-amber-50 to-orange-50/40 px-4 py-3 hover:from-amber-100/60 hover:to-orange-50/60 [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-amber-500 text-white shadow-sm">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/><path d="M12 3v2M12 19v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M3 12h2M19 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/><path d="M9 12h6"/></svg>
+              </span>
+              <span>
+                <span className="block text-[13px] font-semibold tracking-wide text-amber-900">Answer Key Correction</span>
+                <span className="block text-xs font-normal text-amber-800/70">Wrong option? Fix the correct answer here — every student’s score is recalculated instantly</span>
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              <Badge variant="warning">{exam.questions.length} Qs</Badge>
+              <span className="hidden text-xs font-medium text-amber-700 group-open:hidden sm:inline">Show</span>
+              <span className="hidden text-xs font-medium text-amber-700 group-open:inline sm:inline">Hide</span>
+              <svg className="h-4 w-4 text-amber-700 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+            </span>
+          </summary>
+          <div className="border-t border-amber-200 bg-surface px-4 py-4 sm:px-5">
+            {lastFixResult && (
+              <div className="mb-4 flex items-center gap-2 rounded-sm border border-green-200 bg-green-50 px-3 py-2 text-xs font-medium text-green-800">
+                <span className="h-2 w-2 rounded-full bg-green-500"/> Last fix: Q{exam.questions.findIndex(q=>String(q._id)===String(lastFixResult.questionId))+1} → “{lastFixResult.value}” · {lastFixResult.affected} regraded · {lastFixResult.at}
+              </div>
+            )}
+            <div className="space-y-3">
+              {exam.questions.map((q, idx) => {
+                const draft = fixDrafts[q._id] ?? q.correctAnswer;
+                const isChanged = String(draft).trim() !== String(q.correctAnswer).trim();
+                const isMcq = q.type === "mcq" || q.type === "true_false";
+                return (
+                  <div key={q._id} className={`rounded-md border p-3.5 transition ${isChanged ? "border-amber-300 bg-amber-50/40 shadow-sm" : "border-line bg-canvas"}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm bg-ink text-xs font-bold text-white">{idx+1}</span>
+                          <Badge variant="neutral">{q.type.replace(/_/g," ")}</Badge>
+                          <span className="text-xs tabular-nums text-ink-muted">{q.points} pt{q.points!==1?"s":""}</span>
+                          {isChanged && <Badge variant="warning">unsaved change</Badge>}
+                        </div>
+                        <p className="mt-2 line-clamp-2 text-sm font-medium leading-snug text-ink">{q.question}</p>
+                        {isMcq && Array.isArray(q.options) && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {q.options.map((opt) => (
+                              <span key={opt} className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${opt===q.correctAnswer ? "border-green-300 bg-green-50 text-green-800" : "border-line bg-surface text-ink-muted"}`}>
+                                {opt===q.correctAnswer && <span className="mr-1 h-1.5 w-1.5 rounded-full bg-green-500"/>}
+                                {opt}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {!isMcq && (
+                          <p className="mt-1.5 rounded-sm border border-dashed border-line bg-surface px-2.5 py-1.5 text-xs text-ink-muted">Current key: <span className="font-semibold text-ink">{q.correctAnswer || "—"}</span></p>
+                        )}
+                      </div>
+                      <div className="flex w-full flex-col gap-2 sm:w-64 sm:shrink-0">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Correct answer</label>
+                        {isMcq ? (
+                          <select
+                            value={draft}
+                            onChange={(e)=> setFixDrafts(prev=> ({...prev, [q._id]: e.target.value}))}
+                            className="h-9 w-full rounded-sm border border-line bg-surface px-2.5 text-sm text-ink focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          >
+                            {q.options.map(opt=> <option key={opt} value={opt}>{opt}</option>)}
+                          </select>
+                        ) : (
+                          <input
+                            value={draft}
+                            onChange={(e)=> setFixDrafts(prev=> ({...prev, [q._id]: e.target.value}))}
+                            placeholder="Correct answer"
+                            className="h-9 w-full rounded-sm border border-line bg-surface px-2.5 text-sm text-ink placeholder:text-stone-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          />
+                        )}
+                        <Button
+                          size="sm"
+                          onClick={()=> handleFixAnswerKey(q._id)}
+                          disabled={fixLoadingId===q._id || !isChanged}
+                          className={isChanged ? "!bg-amber-600 hover:!bg-amber-700 !text-white disabled:!bg-stone-200" : ""}
+                        >
+                          {fixLoadingId===q._id ? "Regrading…" : "Apply to all students"}
+                        </Button>
+                        <p className="text-[11px] leading-tight text-ink-muted">Updates {submissions.filter(s=> s.status!=="in_progress").length} graded submissions</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-xs text-ink-muted">Tip: this overwrites any prior per-student overrides for that question so the new key is authoritative.</p>
+          </div>
+        </details>
       )}
 
       {/* ── Filter ── */}
@@ -714,6 +848,7 @@ const ExamSubmissions = () => {
                             </div>
                           </div>
                         ) : (
+                          <div className="flex flex-wrap items-center gap-3">
                           <button
                             type="button"
                             onClick={() => startQuestionOverride(question._id, answer?.marksAwarded)}
@@ -721,6 +856,25 @@ const ExamSubmissions = () => {
                           >
                             Override Grade
                           </button>
+                            <span className="text-stone-300">·</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const cur = fixDrafts[question._id] ?? question.correctAnswer;
+                                if (String(cur) === String(answer?.answer || "")) {
+                                  showToast("Student already has this answer — key is elsewhere", "error");
+                                  return;
+                                }
+                                // prefill draft with student's answer and scroll to correction panel
+                                setFixDrafts(prev=> ({...prev, [question._id]: answer?.answer || question.correctAnswer}));
+                                showToast(`Prefilled correction for Q${index+1} — use “Apply to all students” above`, "success");
+                              }}
+                              className="text-[13px] font-medium text-amber-700 underline-offset-2 hover:text-amber-800 hover:underline"
+                              title="Fix answer key for everyone to this student's choice"
+                            >
+                              Fix key to this answer (for all)
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>

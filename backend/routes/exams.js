@@ -1167,6 +1167,45 @@ router.delete("/:examId/questions/:questionId", verifyFirebaseToken, async (req,
   }
 });
 
+// PUT /api/exams/:examId/questions/:questionId/correct-answer — Fix answer key post-results & bulk regrade
+// Allows correcting a wrong correctAnswer after publishing/closing; regrades every submission.
+router.put("/:examId/questions/:questionId/correct-answer", verifyFirebaseToken, async (req, res) => {
+  try {
+    const result = await resolveExamAccess(req, res);
+    if (!result) return;
+    const { exam } = result;
+    const question = exam.questions.id(req.params.questionId);
+    if (!question) return res.status(404).json({ message: "Question not found in exam" });
+
+    const { correctAnswer } = req.body;
+    if (correctAnswer === undefined || String(correctAnswer).trim() === "") {
+      return res.status(400).json({ message: "correctAnswer is required" });
+    }
+    const trimmed = String(correctAnswer).trim();
+
+    // For MCQ/true_false, ensure the new key is one of the options (if options exist)
+    if ((question.type === "mcq" || question.type === "true_false") && Array.isArray(question.options) && question.options.length > 0) {
+      if (!question.options.includes(trimmed)) {
+        return res.status(400).json({ message: `Correct answer must be one of the options: ${question.options.join(", ")}` });
+      }
+    }
+
+    const { fixAnswerKeyAndRegrade } = require("../services/autoGrader");
+    const outcome = await fixAnswerKeyAndRegrade(exam._id, question._id, trimmed);
+
+    const updatedExam = await Exam.findById(exam._id);
+    res.json({
+      message: `Answer key updated to "${trimmed}". Regraded ${outcome.affected} submission(s).`,
+      affected: outcome.affected,
+      totalSubmissions: outcome.totalSubmissions,
+      exam: updatedExam,
+    });
+  } catch (error) {
+    console.error("Error fixing answer key:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
 // PUT /api/exams/:examId/questions/:questionId — Atomically update embedded question
 router.put("/:examId/questions/:questionId", verifyFirebaseToken, async (req, res) => {
   try {
