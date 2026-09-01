@@ -14,6 +14,7 @@ import Skeleton from "../components/ui/Skeleton";
 import Pagination from "../components/ui/Pagination";
 import usePagedData from "../hooks/usePagedData";
 import { Table, THead, TRHead, TH, TBody, TR, TD } from "../components/ui/Table";
+import { QuestionBody } from "../components/RichContent";
 
 const VideoPlayer = React.lazy(() => import("../components/VideoPlayer"));
 
@@ -639,7 +640,9 @@ const ExamSubmissions = () => {
                         </Badge>
                       </div>
 
-                      <p className="mt-2.5 text-sm leading-relaxed text-ink">{question.question}</p>
+                      <div className="mt-2.5 text-sm leading-relaxed text-ink">
+                        <QuestionBody question={question} />
+                      </div>
 
                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
                         <div className="rounded-sm border border-line bg-surface p-3">

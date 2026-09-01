@@ -12,6 +12,7 @@ import Skeleton from "../components/ui/Skeleton";
 import Modal from "../components/ui/Modal";
 import Pagination from "../components/ui/Pagination";
 import usePagedData from "../hooks/usePagedData";
+import { QuestionBody } from "../components/RichContent";
 import { buildSectionGroups, sectionNamesById } from "../lib/examSections";
 
 const PAGE_SIZE = 12;
@@ -382,7 +383,9 @@ const MySubmissions = () => {
                         </span>
                       </div>
 
-                      <p className="mt-2.5 text-sm leading-relaxed text-ink">{question.question}</p>
+                      <div className="mt-2.5 text-sm leading-relaxed text-ink">
+                        <QuestionBody question={question} />
+                      </div>
 
                       <div className={`mt-3 grid gap-3 ${showCorrect ? "sm:grid-cols-2" : ""}`}>
                         <div className="rounded-md border border-line bg-canvas p-3">
